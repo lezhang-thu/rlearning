@@ -141,9 +141,9 @@ class A3CLearner(ActorLearner):
 
             x = 0
             y = 1
-            for _ in range(len(states)):
+            for j in range(len(states)):
                 y *= self.gamma * self.param_lambda
-                x += (rewards[i] + self.gamma * values[i + 1] - values[i]) * y
+                x += (rewards[j] + self.gamma * values[j + 1] - values[j]) * y
 
             # Compute gradients on the local policy/V network and apply them to shared memory
             feed_dict = {
