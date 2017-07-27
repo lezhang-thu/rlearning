@@ -1,0 +1,2 @@
+This also means that the set can be diagrammed as a line of elements, giving it the name linear.
+(total order)
