@@ -347,7 +347,7 @@ def get_shared_mem(num_proc):
     from multiprocessing import Lock
 
     # sync_steps = 20 * 30000  # @tensorflow-rl 20*q_target_update_steps
-    sync_steps = STEPS_PER_EPOCH * num_proc
+    sync_steps = STEPS_PER_EPOCH * BATCH_SIZE // num_proc
     return {
         'lock': Lock(),
         # initially zeroed
