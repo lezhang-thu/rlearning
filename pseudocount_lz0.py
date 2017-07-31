@@ -56,7 +56,7 @@ class PSC():
             ratio_np1 = 1.0 / (self.total_num_states + 1.0)
             pixel_count = self.flat_pixel_counter[range(FRSIZE * FRSIZE), state]
             pp = np.prod(ratio_np1 * (pixel_count + 1.0))
-            pp_over_p = np.prod(ratio * (1.0 + pixel_count) / pixel_count)
+            pp_over_p = np.prod(ratio * ((1.0 + pixel_count) / pixel_count))
             psc_count = (1.0 - pp) / np.maximum(pp_over_p - 1.0, 1e-8)
         self.flat_pixel_counter[range(FRSIZE * FRSIZE), state] += 1.0
         self.total_num_states += 1
