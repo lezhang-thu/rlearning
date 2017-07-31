@@ -31,7 +31,10 @@ class PSC():
         return bonus
 
     def get_state(self):
-        pass
+        return self.total_num_states, self.flat_pixel_counter
+
+    def set_state(self, state):
+        self.total_num_states, self.flat_pixel_counter = state
 
     def _preprocess(self, state):
         state = cv2.cvtColor(state, cv2.COLOR_BGR2GRAY)
@@ -54,8 +57,8 @@ class PSC():
             pixel_count = self.flat_pixel_counter[range(FRSIZE * FRSIZE), state]
             pp = np.prod(ratio_np1 * (pixel_count + 1.0))
             pp_over_p = np.prod(ratio * (1.0 + pixel_count) / pixel_count)
-            psc_count = (1 - pp) / np.maximum(pp_over_p - 1, 1e-8)
-        self.flat_pixel_counter[range(FRSIZE * FRSIZE), state] += 1
+            psc_count = (1.0 - pp) / np.maximum(pp_over_p - 1.0, 1e-8)
+        self.flat_pixel_counter[range(FRSIZE * FRSIZE), state] += 1.0
         self.total_num_states += 1
 
         psc_reward = self._count2reward(psc_count)
