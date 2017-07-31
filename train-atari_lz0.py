@@ -171,7 +171,7 @@ class Model(ModelDesc):
 
 
 class MySimulatorWorker(SimulatorProcess):
-    def __init__(self, idx, pipe_c2s, pipe_s2c, joint_info, id, dirname):
+    def __init__(self, idx, pipe_c2s, pipe_s2c, joint_info, dirname):
         super(MySimulatorWorker, self).__init__(idx, pipe_c2s, pipe_s2c)
 
         self.psc = PSC(PSC_DOWNSAMPLE_VALUE)
@@ -187,7 +187,6 @@ class MySimulatorWorker(SimulatorProcess):
     def write_joint(self):
         with self.lock:
             if self.updated[self.idx] == 1:
-                print('Someone else wrote it. ({})'.format(self.idx))
                 return
             raw_data = pickle.dumps(self.psc.get_state())
             with open(self.file_path, 'wb') as f:
@@ -200,7 +199,6 @@ class MySimulatorWorker(SimulatorProcess):
             raw_data = f.read()
         self.psc.set_state(pickle.loads(raw_data))
         self.updated[self.idx] = 0
-        print('Done reading. ({})'.format(self.idx))
 
     def _build_player(self):
         return get_player(train=True, require_gym=True)
@@ -343,15 +341,17 @@ class MySimulatorMaster(SimulatorMaster, Callback):
                 client.not_scanned_index = k + 1
 
 
-def get_shared_mem(self, num_proc):
+def get_shared_mem(num_proc):
     import ctypes
+    from multiprocessing.sharedctypes import RawArray
+    from multiprocessing import Lock
 
     # sync_steps = 20 * 30000  # @tensorflow-rl 20*q_target_update_steps
-    sync_steps = STEPS_PER_EPOCH
+    sync_steps = STEPS_PER_EPOCH * num_proc
     return {
-        'lock': multiprocessing.Lock(),
+        'lock': Lock(),
         # initially zeroed
-        'updated': multiprocessing.sharedctypes.RawArray(ctypes.c_int, num_proc),
+        'updated': RawArray(ctypes.c_int, num_proc),
         'sync_steps': sync_steps}
 
 
