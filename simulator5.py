@@ -170,32 +170,4 @@ class SimulatorMaster(threading.Thread):
         self.context.destroy(linger=0)
 
 
-# ------------------- the following code are not used at all. Just experimental
-class SimulatorProcessDF(SimulatorProcessBase):
-    """ A simulator which contains a forward model itself, allowing
-    it to produce data points directly """
 
-    def __init__(self, idx, pipe_c2s):
-        super(SimulatorProcessDF, self).__init__(idx)
-        self.pipe_c2s = pipe_c2s
-
-    def run(self):
-        self.player = self._build_player()
-
-        self.ctx = zmq.Context()
-        self.c2s_socket = self.ctx.socket(zmq.PUSH)
-        self.c2s_socket.setsockopt(zmq.IDENTITY, self.identity)
-        self.c2s_socket.set_hwm(5)
-        self.c2s_socket.connect(self.pipe_c2s)
-
-        self._prepare()
-        for dp in self.get_data():
-            self.c2s_socket.send(dumps(dp), copy=False)
-
-    @abstractmethod
-    def _prepare(self):
-        pass
-
-    @abstractmethod
-    def get_data(self):
-        pass
