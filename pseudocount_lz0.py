@@ -45,7 +45,7 @@ class PSC():
     def _update(self, state):
         """
         Model each pixel as independent pixels.
-        p = (c1/n) * (c2/n) * ... * (cn/n)
+        p = c1/n * c2/n * ... * cn/n
         pp = (c1+1)/(n+1) * ... * (cn+1)/(n+1)
         """
         state = np.reshape(state, (FRSIZE * FRSIZE))
