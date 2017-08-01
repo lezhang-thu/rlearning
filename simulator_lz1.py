@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# File: simulator.py
+# File: simulator_lz1.py
 # Author: Yuxin Wu <ppwwyyxxc@gmail.com>
 
 import tensorflow as tf
@@ -129,7 +129,7 @@ class SimulatorMaster(threading.Thread):
                 ident = msg[0]
 
                 if msg[1] == 'request':  # normal requiring A_t
-                    state, reward, is_over = msg[2:]  # reward = R_t, invariant (S_t, R_t)
+                    state, reward, is_over = msg[2:]  # reward is R_t, invariant (S_t, R_t)
                     # TODO check history and warn about dead client
                     client = self.clients[ident]
 
@@ -139,6 +139,7 @@ class SimulatorMaster(threading.Thread):
                         # R_t in (S_{t-1}, A_{t-1}, R_t, \hat{v}(S_{t-1}, w)
                         client.memory[-1].reward = reward
                     if is_over:
+                        # before get any 'feed' msg, the master already clear the buffer
                         self._slide_window(ident, None)
                         self._on_episode_over(ident)
                     else:
