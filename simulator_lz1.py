@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# File: simulator_lz1.py
+# File: simulator.py
 # Author: Yuxin Wu <ppwwyyxxc@gmail.com>
-# Version Info.: incorporate the ideas of Its, jp
 
 import tensorflow as tf
 import multiprocessing as mp
@@ -16,7 +15,6 @@ import six
 from six.moves import queue
 import zmq
 
-from tensorpack.models.common import disable_layer_logging
 from tensorpack.callbacks import Callback
 from tensorpack.tfutils.varmanip import SessionUpdate
 from tensorpack.predict import OfflinePredictor
@@ -148,8 +146,8 @@ class SimulatorMaster(threading.Thread):
                         # feed state and return action
                         self._on_state(state, ident)
                 elif msg[1] == 'feed':  # sliding window sampling
-                    idx, prob, future_reward = msg[2:]
-                    self._window_sample(ident, idx, prob, future_reward)
+                    idx, weight, future_reward = msg[2:]
+                    self._window_sample(ident, idx, weight, future_reward)
         except zmq.ContextTerminated:
             logger.info("[Simulator] Context was terminated.")
 
@@ -176,3 +174,35 @@ class SimulatorMaster(threading.Thread):
 
     def __del__(self):
         self.context.destroy(linger=0)
+
+
+if __name__ == '__main__':
+    import random
+    from tensorpack.RL import NaiveRLEnvironment
+
+
+    class NaiveSimulator(SimulatorProcess):
+        def _build_player(self):
+            return NaiveRLEnvironment()
+
+
+    class NaiveActioner(SimulatorMaster):
+        def _get_action(self, state):
+            time.sleep(1)
+            return random.randint(1, 12)
+
+        def _on_episode_over(self, client):
+            # print("Over: ", client.memory)
+            client.memory = []
+            client.state = 0
+
+
+    name = 'ipc://whatever'
+    procs = [NaiveSimulator(k, name) for k in range(10)]
+    [k.start() for k in procs]
+
+    th = NaiveActioner(name)
+    ensure_proc_terminate(procs)
+    th.start()
+
+    time.sleep(100)
