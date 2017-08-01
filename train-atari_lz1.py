@@ -66,10 +66,10 @@ NETWORK_ARCH = None  # Network Architecture
 PSC_DOWNSAMPLE_VALUE = None
 FILENAME = 'psc_data.pkl'
 
-LBS = 30  # look back steps
 WINDOW_SIZE = 500  # sliding window size
 DEFAULT_PROB = 1e-8
 DECAY_VALUE = 0.99
+SAMPLE_STENGTH = 2
 
 
 def get_player(viz=False, train=False, dumpdir=None, require_gym=False):
@@ -102,14 +102,17 @@ def get_player(viz=False, train=False, dumpdir=None, require_gym=False):
 class Model(ModelDesc):
     def _get_inputs(self):
         assert NUM_ACTIONS is not None
-        return [InputDesc(tf.float32, (None,) + IMAGE_SHAPE3, 'state'),
+        return [InputDesc(tf.uint8, (None,) + IMAGE_SHAPE3, 'state'),
                 InputDesc(tf.int64, (None,), 'action'),
-                InputDesc(tf.float32, (None,), 'futurereward')]
+                InputDesc(tf.float32, (None,), 'action_prob'),
+                InputDesc(tf.float32, (None,), 'futurereward'),
+                InputDesc(tf.float32, (None,), 'weight'),
+                ]
 
     def _get_NN_prediction(self, image):
         image = tf.cast(image, tf.float32) / 255.0
         with argscope(Conv2D, nl=tf.nn.relu):
-            if NETWORK_ARCH == '1':
+            if NETWORK_ARCH == 'tensorpack':
                 l = Conv2D('conv0', image, out_channel=32, kernel_shape=5)
                 l = MaxPooling('pool0', l, 2)
                 l = Conv2D('conv1', l, out_channel=32, kernel_shape=5)
@@ -117,28 +120,21 @@ class Model(ModelDesc):
                 l = Conv2D('conv2', l, out_channel=64, kernel_shape=4)
                 l = MaxPooling('pool2', l, 2)
                 l = Conv2D('conv3', l, out_channel=64, kernel_shape=3)
-                # conv3 output: [None, 10, 10, 64]
             elif NETWORK_ARCH == 'nature':
                 l = Conv2D('conv0', image, out_channel=32, kernel_shape=8, stride=4)
                 l = Conv2D('conv1', l, out_channel=64, kernel_shape=4, stride=2)
                 l = Conv2D('conv2', l, out_channel=64, kernel_shape=3)
-                # conv2 output: [None, 11, 11, 64]
         l = FullyConnected('fc0', l, 512, nl=tf.identity)
         l = PReLU('prelu', l)
-
         logits = FullyConnected('fc-pi', l, out_dim=NUM_ACTIONS, nl=tf.identity)  # unnormalized policy
         value = FullyConnected('fc-v', l, 1, nl=tf.identity)
         return logits, value
 
     def _build_graph(self, inputs):
-        state, action, futurereward = inputs
+        state, action, action_prob, futurereward = inputs
         logits, self.value = self._get_NN_prediction(state)
         self.value = tf.squeeze(self.value, [1], name='pred_value')  # (B,)
         self.policy = tf.nn.softmax(logits, name='policy')
-
-        expf = tf.get_variable('explore_factor', shape=[],
-                               initializer=tf.constant_initializer(1), trainable=False)
-        policy_explore = tf.nn.softmax(logits * expf, name='policy_explore')
         is_training = get_current_tower_context().is_training
         if not is_training:
             return
@@ -147,7 +143,11 @@ class Model(ModelDesc):
         log_pi_a_given_s = tf.reduce_sum(
             log_probs * tf.one_hot(action, NUM_ACTIONS), 1)
         advantage = tf.subtract(tf.stop_gradient(self.value), futurereward, name='advantage')
-        policy_loss = tf.reduce_sum(log_pi_a_given_s * advantage, name='policy_loss')
+
+        pi_a_given_s = tf.reduce_sum(self.policy * tf.one_hot(action, NUM_ACTIONS), 1)  # (B,)
+        importance = tf.stop_gradient(tf.clip_by_value(pi_a_given_s / (action_prob + 1e-8), 0, 10))
+
+        policy_loss = tf.reduce_sum(log_pi_a_given_s * advantage * importance, name='policy_loss')
         xentropy_loss = tf.reduce_sum(
             self.policy * log_probs, name='xentropy_loss')
         value_loss = tf.nn.l2_loss(self.value - futurereward, name='value_loss')
@@ -156,12 +156,14 @@ class Model(ModelDesc):
         advantage = symbf.rms(advantage, name='rms_advantage')
         entropy_beta = tf.get_variable('entropy_beta', shape=[],
                                        initializer=tf.constant_initializer(0.01), trainable=False)
-        self.cost = tf.add_n([policy_loss, xentropy_loss * entropy_beta, value_loss])
+        # @lezhang.thu
+        self.cost = tf.add_n([weight * policy_loss, xentropy_loss * entropy_beta, weight * value_loss])
         self.cost = tf.truediv(self.cost,
                                tf.cast(tf.shape(futurereward)[0], tf.float32),
                                name='cost')
         summary.add_moving_summary(policy_loss, xentropy_loss,
-                                   value_loss, pred_reward, advantage, self.cost)
+                                   value_loss, pred_reward, advantage,
+                                   self.cost, tf.reduce_mean(importance, name='importance'))
 
     def _get_optimizer(self):
         lr = symbf.get_scalar_var('learning_rate', 0.001, summary=True)
@@ -189,59 +191,76 @@ class MySimulatorWorker(SimulatorProcess):
         self._init_window()
 
     def _init_window(self):
-        self.probs = np.array([DEFAULT_PROB for _ in range(WINDOW_SIZE)],
-                              dtype=np.float32)
-        self.valid = [False for _ in range(WINDOW_SIZE)]
-        self.w_index = -1
+        self.w = {
+            'probs': np.array([DEFAULT_PROB for _ in range(WINDOW_SIZE)],
+                              dtype=np.float32),
+            'valid': [False for _ in range(WINDOW_SIZE)],
+            'w_index': 0,
+            'indices': [k for k in range(WINDOW_SIZE)],
+            'value': np.zeros(WINDOW_SIZE, dtype=np.float32),
+            'reward': np.zeros(WINDOW_SIZE, dtype=np.float32)
+        }
 
-        self.indices = [k for k in range(WINDOW_SIZE)]
+    def _get_sample(self, bootstrap):
+        sample_probs = self.w['probs'] / sum(self.w['prob'])
+        sample_idx = np.random.choice(self.w['indices'], p=sample_probs)
+        if not self.w['valid'][sample_idx]:
+            return -1, None, None
+        else:
+            future_reward = self._get_return(sample_idx, bootstrap)
+            return sample_idx, \
+                   np.clip(1.0 / (sample_probs[sample_idx] * WINDOW_SIZE), 0, 1), \
+                   future_reward
 
-        self.value = np.zeros((WINDOW_SIZE), dtype=np.float32)
-        self.reward = np.zeros_like(self.value)
-        self.future_reward = np.zeros_like(self.value)
+    def _get_return(self, sample_idx, bootstrap):
+        # invariant: v corresponds to k's bootstrap return
+        k = self.w['w_index']
+        v = np.clip(self.w['reward'][k], -1, 1) + GAMMA * bootstrap
+        while k != sample_idx:
+            k = k - 1 if k > 0 else WINDOW_SIZE - 1
+            v = np.clip(self.w['reward'][k], -1, 1) + GAMMA * v
+        return v
 
-    def _update_window(self, reward, value):
-        self.w_index = (self.w_index + 1) % WINDOW_SIZE
-        self.valid[self.w_index] = False
-        self.value[self.w_index] = value
-        self.reward[self.w_index] = reward
+    def _update_window(self, reward, value, rw_ds):
+        self.w['index'] = (self.w['index'] + 1) % WINDOW_SIZE
+        k = self.w['index']
+        self.w['valid'][k] = True
+        self.w['value'][k] = value
+        self.w['reward'][k] = reward
+        self.w['probs'][k] = DEFAULT_PROB
 
-        if reward > 0 or reward < 0:
+        if rw_ds:
             # update probs
-            j = WINDOW_SIZE - 1 if self.w_index == 0 else self.w_index - 1
             decay_factor = 1.0
-            while self.valid[j]:
-                self.probs[j] += decay_factor
+            while self.w['valid'][k]:
+                self.w['probs'][k] += decay_factor
+
+                k = WINDOW_SIZE - 1 if k == 0 else k - 1
                 decay_factor *= DECAY_VALUE
 
-                j = WINDOW_SIZE - 1 if self.w_index == 0 else self.w_index - 1
-        sample_probs = self.probs / sum(self.probs)
-        sample_idx = np.random.choice(self.indices, p=sample_probs)
+    def _episode_over_sample(self, c2s_socket):
+        k = self.w['w_index']
+        while self.w['valid'][k]:
+            k = k - 1 if k > 0 else WINDOW_SIZE - 1
+        k = (k + 1) % WINDOW_SIZE
+        k = k if self.w['valid'] else -1
 
-        self.valid[self.w_index] = True
-        if not self.valid[sample_idx]:
-            return -1, None
-        else:
-            return sample_idx, sample_probs[sample_idx]
+        for _ in range(WINDOW_SIZE):
+            idx, prob, future_reward = self._get_sample(0.0)
+            if idx != -1:
+                c2s_socket.send(dumps(
+                    (self.identity, 'feed', idx, prob, future_reward)),
+                    copy=False)  # feed a sampled transition
+            self.w['valid'][k] = False
+            self.w['probs'][k] = DEFAULT_PROB
+            k = (k + 1) % WINDOW_SIZE
 
-    def write_joint(self):
-        with self.lock:
-            if self.updated[self.idx] == 1:
-                return
-            raw_data = pickle.dumps(self.psc.get_state())
-            with open(self.file_path, 'wb') as f:
-                f.write(raw_data)
-            for i in range(len(self.updated)):
-                self.updated[i] = 1
-
-    def read_joint(self):
-        with open(self.file_path, 'rb') as f:
-            raw_data = f.read()
-        self.psc.set_state(pickle.loads(raw_data))
-        self.updated[self.idx] = 0
-
-    def _build_player(self):
-        return get_player(train=True, require_gym=True)
+    def _feed_transition(self, value, c2s_socket):
+        idx, prob, future_reward = self._get_sample(value)
+        if idx != -1:
+            c2s_socket.send(dumps(
+                (self.identity, 'feed', idx, prob, future_reward)),
+                copy=False)  # feed a sampled transition
 
     def run(self):
         player, gym_pl = self._build_player()
@@ -259,72 +278,98 @@ class MySimulatorWorker(SimulatorProcess):
 
         state = player.current_state()  # S_t
         gym_frame = gym_pl.current_state()  # S_t's frame
-
-        reward, isOver = 0, False  # R_t
+        reward, is_over = 0, False  # R_t
         rw_ds = False  # R_t > 0? rw_ds is reward_discovery
         reward += self.psc.psc_reward(gym_frame)  # R_t + bonus_t
         # bonus is w.r.t. S_t
-        '''
+        """
         Invariant:
         	state = S_t, reward = R_t + bonus_t, rw_ds: R_t > 0?
-        	isOver: S_t is terminal?
-        '''
+        	is_over: S_t is terminal?
+        """
         n = 0
         while True:
             c2s_socket.send(dumps(
-                (self.identity, state, reward, isOver, rw_ds)),
+                (self.identity, 'request', state, reward, is_over)),
                 copy=False)  # require A_t
-            action = loads(s2c_socket.recv(copy=False).bytes)  # A_t
-            reward, isOver = player.action(action)  # get R_{t+1}
+            action, value = loads(s2c_socket.recv(copy=False).bytes)  # A_t
+            self._feed_transition(value, c2s_socket)
 
-            if isOver:
+            reward, is_over = player.action(action)  # get R_{t+1}
+            if is_over:
                 c2s_socket.send(dumps(
-                    (self.identity, None, reward, isOver, False)),
+                    (self.identity, 'request', None, reward, is_over)),
                     copy=False)  # worker requires no action
-                reward, isOver = 0, False  # for the auto-restart state
+                self._update_window(reward, 0.0, False)
+                self._episode_over_sample(c2s_socket)
+                reward, is_over = 0, False  # for the auto-restart state
 
             state = player.current_state()  # S_{t+1}
             gym_frame = gym_pl.current_state()  # S_{t+1}'s frame
-
-            if reward > 0:
-                rw_ds = True  # R_{t+1} > 0?
-            else:
-                rw_ds = False
-
+            rw_ds = reward > 0  # R_{t+1} > 0?
             reward += self.psc.psc_reward(gym_frame)  # R_{t+1} + bonus_{t+1}
+            self._update_window(reward, value, rw_ds)
 
             n += 1
-            if n % self.sync_steps == 0:
-                self.write_joint()
-                self.read_joint()
+            self._update_joint(n)
+
+    def _update_joint(self, n):
+        if n % self.sync_steps == 0:
+            self._write_joint()
+            self._read_joint()
+
+    def _write_joint(self):
+        with self.lock:
+            if self.updated[self.idx] == 1:
+                return
+            raw_data = pickle.dumps(self.psc.get_state())
+            with open(self.file_path, 'wb') as f:
+                f.write(raw_data)
+            for i in range(len(self.updated)):
+                self.updated[i] = 1
+
+    def _read_joint(self):
+        with open(self.file_path, 'rb') as f:
+            raw_data = f.read()
+        self.psc.set_state(pickle.loads(raw_data))
+        self.updated[self.idx] = 0
+
+    def _build_player(self):
+        return get_player(train=True, require_gym=True)
 
 
 class MySimulatorMaster(SimulatorMaster, Callback):
     def __init__(self, pipe_c2s, pipe_s2c, model):
-        super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c)
+        super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c, WINDOW_SIZE)
         self.M = model
         self.queue = queue.Queue(maxsize=BATCH_SIZE * 8 * 2)
 
-        self.windows = [[None for _ in range(WINDOW_SIZE)]
-                        for _ in range(SIMULATOR_PROC)]
-        self.w_indices = [-1 for _ in range(SIMULATOR_PROC)]
+        from collections import defaultdict
+        self.windows = defaultdict(lambda:
+                                   {'window': [None for _ in range(WINDOW_SIZE)],
+                                    'buffer': None,
+                                    'index': 0})
 
     def _setup_graph(self):
         self.async_predictor = MultiThreadAsyncPredictor(
-            self.trainer.get_predictors(['state'],
-                                        ['policy_explore', 'pred_value'],
+            self.trainer.get_predictors(['state'], ['policy', 'pred_value'],
                                         PREDICTOR_THREAD), batch_size=PREDICT_BATCH_SIZE)
 
     def _before_train(self):
         self.async_predictor.start()
 
-    def _slide_window(self, state, action, ident):
-        idx = self.w_indices[ident]
-        self.windows[ident][(idx + 1) % WINDOW_SIZE] = [state, action]
+    def _slide_window(self, ident, transition):
+        w = self.windows[ident]
+        if w['buffer'] is not None:
+            w['index'] = (w['index'] + 1) % WINDOW_SIZE
+            w['window'][w['index']] = w['buffer']
+        w['buffer'] = transition
 
-    def _window_sample(self, ident, idx, future_reward):
-        data = self.windows[ident][idx]
-        self.queue.put(data + [future_reward])
+    def _window_sample(self, ident, idx, weight, future_reward):
+        w = self.windows[ident]
+        data = w['window'][idx]
+        for _ in range(SAMPLE_STENGTH):
+            self.queue.put(data + [future_reward, weight])
 
     def _on_state(self, state, ident):
         def cb(outputs):
@@ -337,60 +382,38 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             action = np.random.choice(len(distrib), p=distrib)
             client = self.clients[ident]
 
-            if len(client.memory) + 1 == LBS * 2:
-                client.memory = client.memory[-LBS:]
-            client.memory.append(
-                TransitionExperience(
-                    state, action,  # state = S_t, action = A_t
-                    None, value=value,
-                    isOver=False, rw_ds=None))  # value = \hat{v}(S_t, w)
-            client.not_covered_index -= 1
-            client.not_scanned_index -= 1
+            # state = S_t, action = A_t, value = \hat{v}(S_t, w)
+            client.memory.append(TransitionExperience(
+                state, action, reward=None, value=value, prob=distrib[action]))
 
-            self.send_queue.put([ident, dumps(action)])  # feedback A_t
+            self._slide_window(ident, [state, action, distrib[action]])
+            # feedback A_t, \hat{v}(S_t, w)
+            self.send_queue.put([ident, dumps(action, value)])
 
         self.async_predictor.put_task([state], cb)  # state = S_t
 
-    def _process_memory(self, ident):
+    def _on_episode_over(self, ident):
+        self._parse_memory(0, ident, True)
+
+    def _on_datapoint(self, ident):
         client = self.clients[ident]
+        if len(client.memory) == LOCAL_TIME_MAX + 1:
+            R = client.memory[-1].value
+            self._parse_memory(R, ident, False)
 
-        steps = 0
-        start = client.not_scanned_index
-        for k in range(start, -1, 1):
-            """
-            Invariant:
-                client.memory[client.not_scanned_index].isOver is false.
-                This is guaranteed.
-                Also client.memory[k].rw_ds conflicts with
-                    client.memory[k+1].isOver.
-                It cannot be the case that both are true.
-            """
-            if client.memory[k].rw_ds:
-                steps = min(len(client.memory) + k + 1, LBS)
-            elif client.memory[k + 1].isOver or \
-                                            k - client.not_covered_index + 1 == LOCAL_TIME_MAX:
-                steps = k - client.not_covered_index + 1
+    def _parse_memory(self, init_r, ident, is_over):
+        client = self.clients[ident]
+        mem = client.memory
+        if not is_over:
+            last = mem[-1]
+            mem = mem[:-1]
 
-            if steps > 0:
-                R = float(client.memory[k + 1].value)
-                for j in range(steps):
-                    R = np.clip(client.memory[-j + k].reward
-                                , -1, 1) + GAMMA * R
-                    self.queue.put([client.memory[-j + k].state,
-                                    client.memory[-j + k].action, R])
-                if client.memory[k + 1].isOver:
-                    client.not_scanned_index = k + 2
-                    client.not_covered_index = k + 2
-                    if client.not_scanned_index == 0:
-                        client.memory = []
-                    else:
-                        client.memory = client.memory[k + 2:]
-                else:
-                    client.not_scanned_index = k + 1
-                    client.not_covered_index = k + 1
-                break
-            else:
-                client.not_scanned_index = k + 1
+        mem.reverse()
+        R = float(init_r)
+        for idx, k in enumerate(mem):
+            R = np.clip(k.reward, -1, 1) + GAMMA * R
+            self.queue.put([k.state, k.action, R, k.prob, 1.0])
+        client.memory = [] if is_over else [last]
 
 
 def get_shared_mem(num_proc):
@@ -412,14 +435,13 @@ def get_config():
     logger.set_logger_dir(dirname)
     M = Model()
 
+    joint_info = get_shared_mem(SIMULATOR_PROC)
+    procs = [MySimulatorWorker(k, namec2s, names2c, joint_info, dirname) for k in range(SIMULATOR_PROC)]
+
     name_base = str(uuid.uuid1())[:6]
     PIPE_DIR = os.environ.get('TENSORPACK_PIPEDIR', '.').rstrip('/')
     namec2s = 'ipc://{}/sim-c2s-{}'.format(PIPE_DIR, name_base)
     names2c = 'ipc://{}/sim-s2c-{}'.format(PIPE_DIR, name_base)
-
-    joint_info = get_shared_mem(SIMULATOR_PROC)
-    procs = [MySimulatorWorker(k, namec2s, names2c, joint_info, dirname) for k in range(SIMULATOR_PROC)]
-
     ensure_proc_terminate(procs)
     start_proc_mask_signal(procs)
 
@@ -431,11 +453,7 @@ def get_config():
         callbacks=[
             ModelSaver(),
             ScheduledHyperParamSetter('learning_rate', [(20, 0.0003), (120, 0.0001)]),
-            # from e-drl, OpenAI Gym page, the follow.
-            # ScheduledHyperParamSetter('learning_rate', [(80, 0.0003), (120, 0.0001)]),
             ScheduledHyperParamSetter('entropy_beta', [(80, 0.005)]),
-            ScheduledHyperParamSetter('explore_factor',
-                                      [(80, 2), (100, 3), (120, 4), (140, 5)]),
             HumanHyperParamSetter('learning_rate'),
             HumanHyperParamSetter('entropy_beta'),
             master,
@@ -459,17 +477,19 @@ if __name__ == '__main__':
     parser.add_argument('--task', help='task to perform',
                         choices=['play', 'eval', 'train', 'gen_submit'], default='train')
     parser.add_argument('--output', help='output directory for submission', default='output_dir')
-    parser.add_argument('--episode', help='number of episode to eval', default=100, type=int)
+    parser.add_argument('--episode', help='number of episode to eval',
+                        default=100, type=int)
 
-    parser.add_argument('--network', help='network architecture', choices=['nature', '1'], default='nature')
-    parser.add_argument('--PSC_DOWNSAMPLE_VALUE', help='pseudo-count downsample max value', default='128')
+    parser.add_argument('--network', help='network architecture', choices=['nature', 'tensorpack'],
+                        default='nature')
+    parser.add_argument('--PSC_DOWNSAMPLE_VALUE', help='pseudo-count downsample max value',
+                        default='128')
     args = parser.parse_args()
 
     ENV_NAME = args.env
-    assert ENV_NAME
     logger.info("Environment Name: {}".format(ENV_NAME))
-    p = get_player()
-    del p  # set NUM_ACTIONS
+    NUM_ACTIONS = get_player().get_action_space().num_actions()
+    logger.info("Number of actions: {}".format(NUM_ACTIONS))
 
     PSC_DOWNSAMPLE_VALUE = int(args.PSC_DOWNSAMPLE_VALUE)
     NETWORK_ARCH = args.network
@@ -477,10 +497,9 @@ if __name__ == '__main__':
 
     if args.gpu:
         os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
-    if args.task != 'train':
-        assert args.load is not None
 
     if args.task != 'train':
+        assert args.load is not None
         cfg = PredictConfig(
             model=Model(),
             session_init=get_model_loader(args.load),
