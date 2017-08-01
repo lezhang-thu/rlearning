@@ -148,16 +148,18 @@ class Model(ModelDesc):
         pi_a_given_s = tf.reduce_sum(self.policy * tf.one_hot(action, NUM_ACTIONS), 1)  # (B,)
         importance = tf.stop_gradient(tf.clip_by_value(pi_a_given_s / (action_prob + 1e-8), 0, 10))
 
-        policy_loss = tf.reduce_sum(log_pi_a_given_s * advantage * importance, name='policy_loss')
+        policy_loss = tf.reduce_sum(log_pi_a_given_s * advantage * importance * weight, name='policy_loss')
         xentropy_loss = tf.reduce_sum(
             self.policy * log_probs, name='xentropy_loss')
-        value_loss = tf.nn.l2_loss(self.value - future_reward, name='value_loss')
+        # @lezhang.thu
+        # value_loss = tf.nn.l2_loss(self.value - future_reward, name='value_loss')
+        value_loss = tf.reduce_sum(self.value * advantage * weight, name='value_loss')
 
         pred_reward = tf.reduce_mean(self.value, name='predict_reward')
         advantage = symbf.rms(advantage, name='rms_advantage')
         entropy_beta = tf.get_variable('entropy_beta', shape=[],
                                        initializer=tf.constant_initializer(0.01), trainable=False)
-        # @lezhang.thu
+
         self.cost = tf.add_n([policy_loss, xentropy_loss * entropy_beta, value_loss])
         self.cost = tf.truediv(self.cost,
                                tf.cast(tf.shape(future_reward)[0], tf.float32),
