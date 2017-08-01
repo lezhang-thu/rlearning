@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # File: train-atari_lz1.py
-# Author: Yuxin Wu <ppwwyyxxc@gmail.com>, Music Lee <yuezhanl@andrew.cmu.edu>
+# Author: Yuxin Wu <ppwwyyxxc@gmail.com>
 # on high score learning (github "Its")
 
 import numpy as np
@@ -29,7 +29,7 @@ from tensorpack.tfutils import symbolic_functions as symbf
 from tensorpack.tfutils.gradproc import MapGradient, SummaryGradient
 
 from tensorpack.RL import *
-from simulator5 import *
+from simulator_lz1 import *
 
 import common
 from common import (play_model, Evaluator, eval_model_multithread,
@@ -68,7 +68,7 @@ FILENAME = 'psc_data.pkl'
 
 WINDOW_SIZE = 500  # sliding window size
 DEFAULT_PROB = 1e-8
-DECAY_VALUE = 0.99
+DECAY_FACTOR = 0.99
 SAMPLE_STENGTH = 2
 THRESHOLD = 1e-6
 
@@ -106,7 +106,7 @@ class Model(ModelDesc):
         return [InputDesc(tf.uint8, (None,) + IMAGE_SHAPE3, 'state'),
                 InputDesc(tf.int64, (None,), 'action'),
                 InputDesc(tf.float32, (None,), 'action_prob'),
-                InputDesc(tf.float32, (None,), 'futurereward'),
+                InputDesc(tf.float32, (None,), 'future_reward'),
                 InputDesc(tf.float32, (None,), 'weight'),
                 ]
 
@@ -132,7 +132,7 @@ class Model(ModelDesc):
         return logits, value
 
     def _build_graph(self, inputs):
-        state, action, action_prob, futurereward = inputs
+        state, action, action_prob, future_reward, weight = inputs
         logits, self.value = self._get_NN_prediction(state)
         self.value = tf.squeeze(self.value, [1], name='pred_value')  # (B,)
         self.policy = tf.nn.softmax(logits, name='policy')
@@ -143,7 +143,7 @@ class Model(ModelDesc):
 
         log_pi_a_given_s = tf.reduce_sum(
             log_probs * tf.one_hot(action, NUM_ACTIONS), 1)
-        advantage = tf.subtract(tf.stop_gradient(self.value), futurereward, name='advantage')
+        advantage = tf.subtract(tf.stop_gradient(self.value), future_reward, name='advantage')
 
         pi_a_given_s = tf.reduce_sum(self.policy * tf.one_hot(action, NUM_ACTIONS), 1)  # (B,)
         importance = tf.stop_gradient(tf.clip_by_value(pi_a_given_s / (action_prob + 1e-8), 0, 10))
@@ -151,16 +151,16 @@ class Model(ModelDesc):
         policy_loss = tf.reduce_sum(log_pi_a_given_s * advantage * importance, name='policy_loss')
         xentropy_loss = tf.reduce_sum(
             self.policy * log_probs, name='xentropy_loss')
-        value_loss = tf.nn.l2_loss(self.value - futurereward, name='value_loss')
+        value_loss = tf.nn.l2_loss(self.value - future_reward, name='value_loss')
 
         pred_reward = tf.reduce_mean(self.value, name='predict_reward')
         advantage = symbf.rms(advantage, name='rms_advantage')
         entropy_beta = tf.get_variable('entropy_beta', shape=[],
                                        initializer=tf.constant_initializer(0.01), trainable=False)
         # @lezhang.thu
-        self.cost = tf.add_n([weight * policy_loss, xentropy_loss * entropy_beta, weight * value_loss])
+        self.cost = tf.add_n([policy_loss, xentropy_loss * entropy_beta, value_loss])
         self.cost = tf.truediv(self.cost,
-                               tf.cast(tf.shape(futurereward)[0], tf.float32),
+                               tf.cast(tf.shape(future_reward)[0], tf.float32),
                                name='cost')
         summary.add_moving_summary(policy_loss, xentropy_loss,
                                    value_loss, pred_reward, advantage,
@@ -196,14 +196,14 @@ class MySimulatorWorker(SimulatorProcess):
             'probs': np.array([DEFAULT_PROB for _ in range(WINDOW_SIZE)],
                               dtype=np.float32),
             'valid': [False for _ in range(WINDOW_SIZE)],
-            'w_index': 0,
+            'index': 0,
             'value': np.zeros(WINDOW_SIZE, dtype=np.float32),
             'reward': np.zeros(WINDOW_SIZE, dtype=np.float32)
         }
 
     def _get_sample(self, bootstrap):
-        sample_probs = self.w['probs'] / sum(self.w['prob'])
-        sample_idx = np.random.choice(len(w['probs']), p=sample_probs)
+        sample_probs = self.w['probs'] / sum(self.w['probs'])
+        sample_idx = np.random.choice(len(self.w['probs']), p=sample_probs)
         if not self.w['valid'][sample_idx]:
             return -1, None, None
         else:
@@ -214,7 +214,7 @@ class MySimulatorWorker(SimulatorProcess):
 
     def _get_return(self, sample_idx, bootstrap):
         # invariant: v corresponds to k's bootstrap return
-        k = self.w['w_index']
+        k = self.w['index']
         v = np.clip(self.w['reward'][k], -1, 1) + GAMMA * bootstrap
         while k != sample_idx:
             k = k - 1 if k > 0 else WINDOW_SIZE - 1
@@ -231,18 +231,18 @@ class MySimulatorWorker(SimulatorProcess):
 
         if reward_found:
             # update probs
-            decay_factor = 1.0
+            decay_prob = 1.0
             n = 0
             # invariant: n is the number of slots visited
             while n < WINDOW_SIZE and self.w['valid'][k]:
-                self.w['probs'][k] += decay_factor
+                self.w['probs'][k] += decay_prob
 
                 k = k - 1 if k > 0 else WINDOW_SIZE - 1
-                decay_factor *= DECAY_VALUE
+                decay_prob *= DECAY_FACTOR
                 n += 1
 
     def _episode_over_sample(self, c2s_socket):
-        k = (self.w['w_index'] + 1) % WINDOW_SIZE
+        k = (self.w['index'] + 1) % WINDOW_SIZE
 
         # last just in window, it needs WINDOW_SIZE samplings
         for _ in range(WINDOW_SIZE):
@@ -338,9 +338,9 @@ class MySimulatorWorker(SimulatorProcess):
 
 class MySimulatorMaster(SimulatorMaster, Callback):
     def __init__(self, pipe_c2s, pipe_s2c, model):
-        super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c, WINDOW_SIZE)
+        super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c)
         self.M = model
-        self.queue = queue.Queue(maxsize=BATCH_SIZE * 8 * 2)
+        self.queue = queue.Queue(maxsize=BATCH_SIZE * 8 * 2 * (SAMPLE_STENGTH + 1))
 
         from collections import defaultdict
         self.windows = defaultdict(lambda:
@@ -383,18 +383,18 @@ class MySimulatorMaster(SimulatorMaster, Callback):
                 state, action, reward=None, value=value, prob=distrib[action]))
             self._slide_window(ident, [state, action, distrib[action]])
             # feedback A_t, \hat{v}(S_t, w)
-            self.send_queue.put([ident, dumps(action, value)])
+            self.send_queue.put([ident, dumps((action, value))])
 
         self.async_predictor.put_task([state], cb)  # state = S_t
 
     def _on_episode_over(self, ident):
-        self._parse_memory(0, ident, True)
+        self._parse_memory(0.0, ident, True)
 
     def _on_datapoint(self, ident):
         client = self.clients[ident]
         if len(client.memory) == LOCAL_TIME_MAX + 1:
-            R = client.memory[-1].value
-            self._parse_memory(R, ident, False)
+            bootstrap = client.memory[-1].value
+            self._parse_memory(bootstrap, ident, False)
 
     def _parse_memory(self, init_r, ident, is_over):
         client = self.clients[ident]
@@ -404,10 +404,10 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             mem = mem[:-1]
 
         mem.reverse()
-        R = float(init_r)
+        future_reward = float(init_r)
         for idx, k in enumerate(mem):
-            R = np.clip(k.reward, -1, 1) + GAMMA * R
-            self.queue.put([k.state, k.action, R, k.prob, 1.0])
+            future_reward = np.clip(k.reward, -1, 1) + GAMMA * future_reward
+            self.queue.put([k.state, k.action, k.prob, future_reward, 1.0])
         client.memory = [] if is_over else [last]
 
 
@@ -426,17 +426,17 @@ def get_shared_mem(num_proc):
 
 
 def get_config():
-    dirname = os.path.join('train_log', 'train-atari-{}'.format(ENV_NAME))
+    dirname = os.path.join('train_log', 'train-lezhang-1-{}'.format(ENV_NAME))
     logger.set_logger_dir(dirname)
     M = Model()
 
     joint_info = get_shared_mem(SIMULATOR_PROC)
-    procs = [MySimulatorWorker(k, namec2s, names2c, joint_info, dirname) for k in range(SIMULATOR_PROC)]
 
     name_base = str(uuid.uuid1())[:6]
     PIPE_DIR = os.environ.get('TENSORPACK_PIPEDIR', '.').rstrip('/')
     namec2s = 'ipc://{}/sim-c2s-{}'.format(PIPE_DIR, name_base)
     names2c = 'ipc://{}/sim-s2c-{}'.format(PIPE_DIR, name_base)
+    procs = [MySimulatorWorker(k, namec2s, names2c, joint_info, dirname) for k in range(SIMULATOR_PROC)]
     ensure_proc_terminate(procs)
     start_proc_mask_signal(procs)
 
