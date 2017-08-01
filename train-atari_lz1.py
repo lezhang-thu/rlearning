@@ -70,6 +70,7 @@ WINDOW_SIZE = 500  # sliding window size
 DEFAULT_PROB = 1e-8
 DECAY_VALUE = 0.99
 SAMPLE_STENGTH = 2
+THRESHOLD = 1e-6
 
 
 def get_player(viz=False, train=False, dumpdir=None, require_gym=False):
@@ -196,14 +197,13 @@ class MySimulatorWorker(SimulatorProcess):
                               dtype=np.float32),
             'valid': [False for _ in range(WINDOW_SIZE)],
             'w_index': 0,
-            'indices': [k for k in range(WINDOW_SIZE)],
             'value': np.zeros(WINDOW_SIZE, dtype=np.float32),
             'reward': np.zeros(WINDOW_SIZE, dtype=np.float32)
         }
 
     def _get_sample(self, bootstrap):
         sample_probs = self.w['probs'] / sum(self.w['prob'])
-        sample_idx = np.random.choice(self.w['indices'], p=sample_probs)
+        sample_idx = np.random.choice(len(w['probs']), p=sample_probs)
         if not self.w['valid'][sample_idx]:
             return -1, None, None
         else:
@@ -221,45 +221,45 @@ class MySimulatorWorker(SimulatorProcess):
             v = np.clip(self.w['reward'][k], -1, 1) + GAMMA * v
         return v
 
-    def _update_window(self, reward, value, rw_ds):
+    def _update_window(self, reward, value, reward_found):
         self.w['index'] = (self.w['index'] + 1) % WINDOW_SIZE
         k = self.w['index']
         self.w['valid'][k] = True
-        self.w['value'][k] = value
-        self.w['reward'][k] = reward
+        self.w['value'][k] = value  # \hat{v}(S_t, w)
+        self.w['reward'][k] = reward  # R_t+1
         self.w['probs'][k] = DEFAULT_PROB
 
-        if rw_ds:
+        if reward_found:
             # update probs
             decay_factor = 1.0
-            while self.w['valid'][k]:
+            n = 0
+            # invariant: n is the number of slots visited
+            while n < WINDOW_SIZE and self.w['valid'][k]:
                 self.w['probs'][k] += decay_factor
 
-                k = WINDOW_SIZE - 1 if k == 0 else k - 1
+                k = k - 1 if k > 0 else WINDOW_SIZE - 1
                 decay_factor *= DECAY_VALUE
+                n += 1
 
     def _episode_over_sample(self, c2s_socket):
-        k = self.w['w_index']
-        while self.w['valid'][k]:
-            k = k - 1 if k > 0 else WINDOW_SIZE - 1
-        k = (k + 1) % WINDOW_SIZE
-        k = k if self.w['valid'] else -1
+        k = (self.w['w_index'] + 1) % WINDOW_SIZE
 
+        # last just in window, it needs WINDOW_SIZE samplings
         for _ in range(WINDOW_SIZE):
-            idx, prob, future_reward = self._get_sample(0.0)
+            idx, weight, future_reward = self._get_sample(0.0)
             if idx != -1:
                 c2s_socket.send(dumps(
-                    (self.identity, 'feed', idx, prob, future_reward)),
+                    (self.identity, 'feed', idx, weight, future_reward)),
                     copy=False)  # feed a sampled transition
-            self.w['valid'][k] = False
+            self.w['valid'][k] = False  # the window is sliding away
             self.w['probs'][k] = DEFAULT_PROB
             k = (k + 1) % WINDOW_SIZE
 
     def _feed_transition(self, value, c2s_socket):
-        idx, prob, future_reward = self._get_sample(value)
+        idx, weight, future_reward = self._get_sample(value)
         if idx != -1:
             c2s_socket.send(dumps(
-                (self.identity, 'feed', idx, prob, future_reward)),
+                (self.identity, 'feed', idx, weight, future_reward)),
                 copy=False)  # feed a sampled transition
 
     def run(self):
@@ -276,39 +276,37 @@ class MySimulatorWorker(SimulatorProcess):
         # s2c_socket.set_hwm(5)
         s2c_socket.connect(self.s2c)
 
-        state = player.current_state()  # S_t
-        gym_frame = gym_pl.current_state()  # S_t's frame
-        reward, is_over = 0, False  # R_t
-        rw_ds = False  # R_t > 0? rw_ds is reward_discovery
-        reward += self.psc.psc_reward(gym_frame)  # R_t + bonus_t
-        # bonus is w.r.t. S_t
-        """
-        Invariant:
-        	state = S_t, reward = R_t + bonus_t, rw_ds: R_t > 0?
-        	is_over: S_t is terminal?
-        """
-        n = 0
+        state = player.current_state()  # S_0
+        reward = None  # R_0 serves as dummy
+        # loop invariant: S_t. Start: t=0.
+        n = 0  # n is t
         while True:
             c2s_socket.send(dumps(
-                (self.identity, 'request', state, reward, is_over)),
+                # last component is is_over
+                (self.identity, 'request', state, reward, False)),
                 copy=False)  # require A_t
-            action, value = loads(s2c_socket.recv(copy=False).bytes)  # A_t
-            self._feed_transition(value, c2s_socket)
+            action, value = loads(s2c_socket.recv(copy=False).bytes)  # A_t, \hat{v}(S_t, w)
+            self._feed_transition(value, c2s_socket)  # as we have \hat{v}(S_t, w)
 
             reward, is_over = player.action(action)  # get R_{t+1}
             if is_over:
                 c2s_socket.send(dumps(
-                    (self.identity, 'request', None, reward, is_over)),
+                    (self.identity, 'request', None, reward, True)),
                     copy=False)  # worker requires no action
-                self._update_window(reward, 0.0, False)
+                self._update_window(reward, value, not abs(reward - 0.0) < THRESHOLD)
                 self._episode_over_sample(c2s_socket)
-                reward, is_over = 0, False  # for the auto-restart state
-
-            state = player.current_state()  # S_{t+1}
-            gym_frame = gym_pl.current_state()  # S_{t+1}'s frame
-            rw_ds = reward > 0  # R_{t+1} > 0?
-            reward += self.psc.psc_reward(gym_frame)  # R_{t+1} + bonus_{t+1}
-            self._update_window(reward, value, rw_ds)
+                state = player.current_state()  # S_0
+                reward = None  # for the auto-restart state
+            else:
+                """assume S_t-1 etc. is okay, i.e. in the window,
+                here, S_t gets its info.:
+                R_t+1, \hat{v}(S_t, w).
+                this is the invariant."""
+                reward_found = not abs(reward - 0.0) < THRESHOLD
+                state = player.current_state()  # S_{t+1}
+                gym_frame = gym_pl.current_state()  # S_{t+1}'s frame
+                reward += self.psc.psc_reward(gym_frame)
+                self._update_window(reward, value, reward_found)
 
             n += 1
             self._update_joint(n)
@@ -367,9 +365,8 @@ class MySimulatorMaster(SimulatorMaster, Callback):
 
     def _window_sample(self, ident, idx, weight, future_reward):
         w = self.windows[ident]
-        data = w['window'][idx]
         for _ in range(SAMPLE_STENGTH):
-            self.queue.put(data + [future_reward, weight])
+            self.queue.put(w['window'][idx] + [future_reward, weight])
 
     def _on_state(self, state, ident):
         def cb(outputs):
@@ -381,11 +378,9 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             assert np.all(np.isfinite(distrib)), distrib
             action = np.random.choice(len(distrib), p=distrib)
             client = self.clients[ident]
-
             # state = S_t, action = A_t, value = \hat{v}(S_t, w)
             client.memory.append(TransitionExperience(
                 state, action, reward=None, value=value, prob=distrib[action]))
-
             self._slide_window(ident, [state, action, distrib[action]])
             # feedback A_t, \hat{v}(S_t, w)
             self.send_queue.put([ident, dumps(action, value)])
