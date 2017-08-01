@@ -85,10 +85,7 @@ class SimulatorMaster(threading.Thread):
     class ClientState(object):
         def __init__(self):
             # (S_t, A_t, R_{t+1}, \hat{v}(S_t, w))
-            self.memory = []  # list of Experience
-
-            self.not_covered_index = 0
-            self.not_scanned_index = 0
+            self.memory = []  # list of experience
 
     def __init__(self, pipe_c2s, pipe_s2c):
         super(SimulatorMaster, self).__init__()
@@ -133,49 +130,49 @@ class SimulatorMaster(threading.Thread):
                 msg = loads(self.c2s_socket.recv(copy=False).bytes)
                 ident = msg[0]
 
-                if msg[1] == 0:  # normal requiring A_t
-                    state, reward, isOver, rw_ds = msg[2:]  # reward = R_t, invariant (S_t, R_t)
+                if msg[1] == 'request':  # normal requiring A_t
+                    state, reward, is_over = msg[2:]  # reward = R_t, invariant (S_t, R_t)
                     # TODO check history and warn about dead client
                     client = self.clients[ident]
 
-                    # check if reward&isOver is valid
+                    # check if reward&is_over is valid
                     # in the first message, only state is valid
                     if len(client.memory) > 0:
-                        client.memory[-1].reward = reward
                         # R_t in (S_{t-1}, A_{t-1}, R_t, \hat{v}(S_{t-1}, w)
-                        client.memory[-1].rw_ds = rw_ds
-
-                    self._process_memory(ident)
-                    if isOver:
-                        client.memory.append(
-                            TransitionExperience(
-                                None, None,  # state = S_t, action = A_t
-                                None, value=0.0,
-                                isOver=True, rw_ds=None))  # value = \hat{v}(S_t, w)
-                        client.not_covered_index -= 1
-                        client.not_scanned_index -= 1
+                        client.memory[-1].reward = reward
+                    if is_over:
+                        self._slide_window(ident, None)
+                        self._on_episode_over(ident)
                     else:
+                        self._on_datapoint(ident)
                         # feed state and return action
                         self._on_state(state, ident)
-                elif msg[1] == 1:  # sliding window sampling
-                    idx, future_reward = msg[2:]
-                    self._window_sample(ident, idx, future_reward)
-
+                elif msg[1] == 'feed':  # sliding window sampling
+                    idx, prob, future_reward = msg[2:]
+                    self._window_sample(ident, idx, prob, future_reward)
         except zmq.ContextTerminated:
             logger.info("[Simulator] Context was terminated.")
 
     @abstractmethod
     def _on_state(self, state, ident):
         """response to state sent by ident. Preferrably an async call"""
-        pass
 
     @abstractmethod
-    def _process_memory(self, ident):
-        pass
+    def _on_episode_over(self, client):
+        """ callback when the client just finished an episode.
+            You may want to clear the client's memory in this callback.
+        """
+
+    def _on_datapoint(self, client):
+        """ callback when the client just finished a transition"""
 
     @abstractmethod
     def _window_sample(self, ident, idx, hat_v):
         """add a sample for the sliding window to queue"""
+
+    @abstractmethod
+    def _slide_window(self, ident, transition):
+        """feed a new transition to sliding window system"""
 
     def __del__(self):
         self.context.destroy(linger=0)
