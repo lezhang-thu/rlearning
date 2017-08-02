@@ -204,8 +204,7 @@ class MySimulatorWorker(SimulatorProcess):
         }
 
     def _get_sample(self, bootstrap):
-        import math
-        sample_probs = self.w['probs'] / math.fsum(self.w['probs'])
+        sample_probs = self.w['probs'] / np.sum(self.w['probs'])
         sample_idx = np.random.choice(len(self.w['probs']), p=sample_probs)
         if not self.w['valid'][sample_idx]:
             return -1, None, None
