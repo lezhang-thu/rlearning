@@ -295,7 +295,7 @@ class MySimulatorWorker(SimulatorProcess):
                 c2s_socket.send(dumps(
                     (self.identity, 'request', None, reward, True)),
                     copy=False)  # worker requires no action
-                self._update_window(reward, value, not abs(reward - 0.0) < THRESHOLD)
+                self._update_window(reward, value, abs(reward - 0.0) > THRESHOLD)
                 self._episode_over_sample(c2s_socket)
                 state = player.current_state()  # S_0
                 reward = None  # for the auto-restart state
@@ -304,7 +304,7 @@ class MySimulatorWorker(SimulatorProcess):
                 here, S_t gets its info.:
                 R_t+1, \hat{v}(S_t, w).
                 this is the invariant."""
-                reward_found = not abs(reward - 0.0) < THRESHOLD
+                reward_found = abs(reward - 0.0) > THRESHOLD
                 state = player.current_state()  # S_{t+1}
                 gym_frame = gym_pl.current_state()  # S_{t+1}'s frame
                 reward += self.psc.psc_reward(gym_frame)
