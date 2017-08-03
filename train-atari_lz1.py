@@ -68,7 +68,7 @@ FILENAME = 'psc_data.pkl'
 
 WINDOW_SIZE = 500  # sliding window size
 DEFAULT_PROB = 1e-8
-DECAY_FACTOR = 0.95
+DECAY_FACTOR = 0.99
 SAMPLE_STENGTH = 1
 THRESHOLD = 1e-6
 
