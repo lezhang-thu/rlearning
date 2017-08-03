@@ -63,7 +63,7 @@ EVALUATE_PROC = min(multiprocessing.cpu_count() // 2, 20)
 NUM_ACTIONS = None
 ENV_NAME = None
 NETWORK_ARCH = None  # Network Architecture
-PSC_DOWNSAMPLE_VALUE = None
+PSC_DOWNSAMPLE_VALUE = 128
 FILENAME = 'psc_data.pkl'
 
 WINDOW_SIZE = 500  # sliding window size
@@ -479,8 +479,6 @@ if __name__ == '__main__':
 
     parser.add_argument('--network', help='network architecture', choices=['nature', 'tensorpack'],
                         default='nature')
-    parser.add_argument('--PSC_DOWNSAMPLE_VALUE', help='pseudo-count downsample max value',
-                        default='128')
     args = parser.parse_args()
 
     ENV_NAME = args.env
@@ -488,7 +486,6 @@ if __name__ == '__main__':
     NUM_ACTIONS = get_player().get_action_space().num_actions()
     logger.info("Number of actions: {}".format(NUM_ACTIONS))
 
-    PSC_DOWNSAMPLE_VALUE = int(args.PSC_DOWNSAMPLE_VALUE)
     NETWORK_ARCH = args.network
     logger.info("Using network architecutre: " + NETWORK_ARCH)
 
