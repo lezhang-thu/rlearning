@@ -52,13 +52,13 @@ IMAGE_SHAPE3 = IMAGE_SIZE + (CHANNEL,)
 
 LOCAL_TIME_MAX = 5
 STEPS_PER_EPOCH = 6000
-EVAL_EPISODE = 50
+EVAL_EPISODE = 2
 BATCH_SIZE = 128
 PREDICT_BATCH_SIZE = 15  # batch for efficient forward
 SIMULATOR_PROC = 50
 PREDICTOR_THREAD_PER_GPU = 3
 PREDICTOR_THREAD = None
-EVALUATE_PROC = min(multiprocessing.cpu_count() // 2, 20)
+EVALUATE_PROC = min(multiprocessing.cpu_count() // 2, 5)
 
 NUM_ACTIONS = None
 ENV_NAME = None
