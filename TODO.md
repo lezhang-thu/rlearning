@@ -17,4 +17,11 @@ index是不是对应于真实的state, 还是对应于dummy.
 例如，知道了S_t, A_t, R_t+1, \hat{v}(S_t, w).
 S_t+1, 问master, A_t+1是什么。
 
+5.
+tensorpack中，Evaluator实在是消耗资源了。在common.py中，是20个进程。
+然后，每一个默认是评估50个episodes. 所以，整个的，太消耗了。
+
+将其改成了最多5个进程。然后，评估是2个episodes.
+所以，总的是10个epsiodes. 可以了。
+
 
