@@ -58,7 +58,6 @@ PREDICT_BATCH_SIZE = 15  # batch for efficient forward
 SIMULATOR_PROC = 50
 PREDICTOR_THREAD_PER_GPU = 3
 PREDICTOR_THREAD = None
-EVALUATE_PROC = min(multiprocessing.cpu_count() // 2, 5)
 
 NUM_ACTIONS = None
 ENV_NAME = None
@@ -68,7 +67,7 @@ FILENAME = 'psc_data.pkl'
 
 WINDOW_SIZE = 500  # sliding window size
 DEFAULT_PROB = 1e-8
-DECAY_FACTOR = 0.95
+DECAY_FACTOR = 0.99
 SAMPLE_STENGTH = 1
 THRESHOLD = 1e-6
 
@@ -190,7 +189,7 @@ class MySimulatorWorker(SimulatorProcess):
         self.file_path = os.path.join(dirname, FILENAME)
 
         if os.path.isfile(self.file_path):
-            self.read_joint()
+            self._read_joint()
         self._init_window()
 
     def _init_window(self):
@@ -457,7 +456,7 @@ def get_config():
             StartProcOrThread(master),
             PeriodicTrigger(Evaluator(
                 EVAL_EPISODE, ['state'], ['policy'], get_player),
-                every_k_epochs=3),
+                every_k_epochs=6),
         ],
         session_creator=sesscreate.NewSessionCreator(
             config=get_default_sess_config(0.5)),
