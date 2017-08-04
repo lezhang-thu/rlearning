@@ -99,7 +99,8 @@ class Evaluator(Triggerable):
         self.get_player_fn = get_player_fn
 
     def _setup_graph(self):
-        NR_PROC = min(multiprocessing.cpu_count() // 2, 20)
+        # @lezhang.thu
+        NR_PROC = min(multiprocessing.cpu_count() // 2, 5)
         self.pred_funcs = [self.trainer.get_predictor(
             self.input_names, self.output_names)] * NR_PROC
 
