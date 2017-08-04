@@ -68,7 +68,7 @@ FILENAME = 'psc_data.pkl'
 WINDOW_SIZE = 500  # sliding window size
 DEFAULT_PROB = 1e-8
 DECAY_FACTOR = 0.99
-SAMPLE_STENGTH = 1
+SAMPLE_STRENGTH = 2
 THRESHOLD = 1e-6
 
 
@@ -247,21 +247,23 @@ class MySimulatorWorker(SimulatorProcess):
 
         # last just in window, it needs WINDOW_SIZE samplings
         for _ in range(WINDOW_SIZE):
-            idx, weight, future_reward = self._get_sample(0.0)
-            if idx != -1:
-                c2s_socket.send(dumps(
-                    (self.identity, 'feed', idx, weight, future_reward)),
-                    copy=False)  # feed a sampled transition
+            for _ in range(SAMPLE_STRENGTH):
+                idx, weight, future_reward = self._get_sample(0.0)
+                if idx != -1:
+                    c2s_socket.send(dumps(
+                        (self.identity, 'feed', idx, weight, future_reward)),
+                        copy=False)  # feed a sampled transition
             self.w['valid'][k] = False  # the window is sliding away
             self.w['probs'][k] = DEFAULT_PROB
             k = (k + 1) % WINDOW_SIZE
 
     def _feed_transition(self, value, c2s_socket):
-        idx, weight, future_reward = self._get_sample(value)
-        if idx != -1:
-            c2s_socket.send(dumps(
-                (self.identity, 'feed', idx, weight, future_reward)),
-                copy=False)  # feed a sampled transition
+        for _ in range(SAMPLE_STRENGTH):
+            idx, weight, future_reward = self._get_sample(value)
+            if idx != -1:
+                c2s_socket.send(dumps(
+                    (self.identity, 'feed', idx, weight, future_reward)),
+                    copy=False)  # feed a sampled transition
 
     def run(self):
         player, gym_pl = self._build_player()
@@ -341,7 +343,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
     def __init__(self, pipe_c2s, pipe_s2c, model):
         super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c)
         self.M = model
-        self.queue = queue.Queue(maxsize=BATCH_SIZE * 8 * 2 * (SAMPLE_STENGTH + 1))
+        self.queue = queue.Queue(maxsize=BATCH_SIZE * 8 * 2 * (SAMPLE_STRENGTH + 1))
 
         from collections import defaultdict
         self.windows = defaultdict(lambda:
@@ -366,8 +368,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
 
     def _window_sample(self, ident, idx, weight, future_reward):
         w = self.windows[ident]
-        for _ in range(SAMPLE_STENGTH):
-            self.queue.put(w['window'][idx] + [future_reward, weight])
+        self.queue.put(w['window'][idx] + [future_reward, weight])
 
     def _on_state(self, state, ident):
         def cb(outputs):
