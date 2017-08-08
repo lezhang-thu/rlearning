@@ -163,10 +163,10 @@ class SimulatorMaster(threading.Thread):
         """
 
     def _on_datapoint(self, client):
-        """ callback when the client just finished a transition"""
+        """callback when the client just finished a transition"""
 
     @abstractmethod
-    def _window_sample(self, ident, idx, hat_v):
+    def _window_sample(self, ident, idx, weight, value, gaelam):
         """add a sample for the sliding window to queue"""
 
     @abstractmethod
