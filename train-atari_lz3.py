@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 # File: train-atari_lz3.py
 # Author: Yuxin Wu <ppwwyyxxc@gmail.com>
-# on high score learning (github "Its")
 
 import numpy as np
 import os
