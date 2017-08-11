@@ -206,7 +206,7 @@ class MySimulatorWorker(SimulatorProcess):
 
         if os.path.isfile(self.file_path):
             self._read_joint()
-            # self._init_window()
+        # self._init_window()
 
     def _init_window(self):
         self.w = {
