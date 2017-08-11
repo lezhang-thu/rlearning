@@ -164,7 +164,7 @@ class SimulatorMaster(threading.Thread):
         """
 
     def _on_datapoint(self, client):
-        """ callback when the client just finished a transition"""
+        """callback when the client just finished a transition"""
 
     @abstractmethod
     def _window_sample(self, ident, idx, weight, value, gaelam):
