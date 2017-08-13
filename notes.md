@@ -1,3 +1,7 @@
+0.
+The link is good. See:
+https://media.nips.cc/Conferences/2016/Slides/6198-Slides.pdf
+
 1.
 我们知道了S_t, A_t, R_t+1, \hat{v}(S_t+1, w). 还有S_t+1.
 现在，如果master接收了"A_t+1是什么"的query. 那么：
