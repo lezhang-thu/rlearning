@@ -1,13 +1,22 @@
 -1.
 Dh(x) = Dg(f(x))Df(x), D等是Jacobian.
+
 对于我们的问题，ACER中的trust region. 可以如下考虑：
+
 \tfract{\partial\phi_\theta(x)}{\partial\theta}z^*
+
 z^* 的前面部分是Jacobian. 上式的本质就是matrix之间的乘法。我们的idea是
+
 将其写成single cost. 这样可以方便tf对其进行处理。
+
 对z^* 进行stop_gradient. single cost可以写为：
+
 \phi_\theta(x)^T z^* 
+
 z^* 是一个column vector. 上式的idea是dot product, 所以，乘完之后会有sum的操作。
+
 我们的问题中，\phi_\theta(x)是一个vector, 对于单个的transition.
+
 其的form是\pi(a|s)这种。
 
 0.
