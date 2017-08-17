@@ -1,4 +1,5 @@
 -1.
+
 Dh(x) = Dg(f(x))Df(x), D等是Jacobian.
 
 对于我们的问题，ACER中的trust region. 可以如下考虑：
