@@ -25,6 +25,7 @@ from tensorpack.utils.concurrency import *
 from tensorpack.utils.serialize import *
 from tensorpack.utils.stats import *
 from tensorpack.tfutils import symbolic_functions as symbf
+from tensorpack.tfutils.scope_utils import auto_reuse_variable_scope
 from tensorpack.tfutils.gradproc import MapGradient, SummaryGradient
 from tensorpack.tfutils import collection
 
@@ -118,8 +119,13 @@ class Model(ModelDesc):
             InputDesc(tf.float32, (None,), 'tdlamret'),
             InputDesc(tf.float32, (None,), 'weight'),
         ]
+      
+    # decorate the function
+    @auto_reuse_variable_scope
+    def get_DQN_prediction(self, image, require_value=False):
+        return self._get_DQN_prediction(image, require_value)
 
-    def _get_NN_prediction(self, image, required_value=False):
+    def _get_NN_prediction(self, image, require_value):
         image = tf.cast(image, tf.float32) / 255.0
         with argscope(Conv2D, nl=tf.nn.relu):
             if NETWORK_ARCH == 'tensorpack':
@@ -144,7 +150,7 @@ class Model(ModelDesc):
 
     def _build_graph(self, inputs):
         state, action, oldpi, vpred_old, atarg, ret, weight = inputs
-        logits, self.value = self._get_NN_prediction(state, required_value=True)
+        logits, self.value = self.get_NN_prediction(state, require_value=True)
         self.value = tf.squeeze(self.value, [1], name='pred_value')  # (B,)
         self.policy = tf.nn.softmax(logits, name='policy')
         is_training = get_current_tower_context().is_training
@@ -180,9 +186,8 @@ class Model(ModelDesc):
             initializer=tf.constant_initializer(0.01), trainable=False)
 
         # @lezhang.thu
-        with tf.variable_scope('average'), \
-             collection.freeze_collection([tf.GraphKeys.TRAINABLE_VARIABLES]):
-            policy_avg = tf.nn.softmax(self._get_NN_prediction(state), name='policy_avg')
+        with tf.variable_scope('average'):
+            policy_avg = tf.nn.softmax(self.get_NN_prediction(state), name='policy_avg')
 
         """(B, policy_avg's prob. vector / self.policy's prob. vector)"""
         grad_klavgnew = - policy_avg / (self.policy + 1e-8)
