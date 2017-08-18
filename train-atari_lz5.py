@@ -225,7 +225,7 @@ class Model(ModelDesc):
             if avg_name.startswith('average'):
                 new_name = avg_name.replace('average/', '')
                 logger.info("{} <- {}".format(avg_name, new_name))
-                ops.append(v.assign(AVG_UPDATE_ALPHA * G.get_tensor_by_name(avg_name) +
+                ops.append(v.assign(AVG_UPDATE_ALPHA * v +
                                     (1 - AVG_UPDATE_ALPHA) * G.get_tensor_by_name(new_name + ':0')))
         return tf.group(*ops, name='update_avg_network')
 
