@@ -122,8 +122,8 @@ class Model(ModelDesc):
       
     # decorate the function
     @auto_reuse_variable_scope
-    def get_DQN_prediction(self, image, require_value=False):
-        return self._get_DQN_prediction(image, require_value)
+    def get_NN_prediction(self, image, require_value=False):
+        return self._get_NN_prediction(image, require_value)
 
     def _get_NN_prediction(self, image, require_value):
         image = tf.cast(image, tf.float32) / 255.0
