@@ -196,7 +196,7 @@ class Model(ModelDesc):
                                        axis=1, keep_dims=True)) * grad_klavgnew
         z_star = grad_pol_surr - modify
         z_star = tf.stop_gradient(z_star)
-        policy_loss = - tf.reduce_sum(z_star * self.policy, name='policy_loss')
+        policy_loss = tf.reduce_sum(-z_star * self.policy, name='policy_loss')
 
         self.cost = tf.add_n([policy_loss, xentropy_loss * entropy_beta, vf_loss])
         self.cost = tf.truediv(self.cost,
