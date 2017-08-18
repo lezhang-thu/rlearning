@@ -74,6 +74,7 @@ DECAY_FACTOR = 0.99
 CLIP_PARAM = 0.1
 
 AVG_UPDATE_ALPHA = 0.99
+TRUST_REGION_DELTA = 1
 
 
 def get_player(viz=False, train=False, dumpdir=None, require_gym=False):
@@ -141,21 +142,6 @@ class Model(ModelDesc):
             return logits, value
         return logits
 
-    # @lezhang.thu CategoricalPd.kl, from baselines.common.distributions
-    def kl(self, logits_avg, logits):
-        a0 = logits_avg - tf.reduce_max(logits_avg, axis=1, keepdims=True)
-        a1 = logits - tf.reduce_max(logits, axis=1, keepdims=True)
-
-        ea0 = tf.exp(a0)
-        ea1 = tf.exp(a1)
-
-        z0 = tf.reduce_sum(ea0, axis=1, keepdims=True)
-        z1 = tf.reduce_sum(ea1, axis=1, keepdims=True)
-
-        p0 = ea0 / z0
-        return tf.reduce_sum(p0 * (a0 - tf.log(z0) - a1 + tf.log(z1)), axis=1)
-
-
     def _build_graph(self, inputs):
         state, action, oldpi, vpred_old, atarg, ret, weight = inputs
         logits, self.value = self._get_NN_prediction(state, required_value=True)
@@ -166,9 +152,6 @@ class Model(ModelDesc):
             return
         log_probs = tf.log(self.policy + 1e-6)
 
-        # ret = atarg + vpred_old
-        # atarg = tf.clip_by_value(atarg * weight, -1, 1)
-
         pi = tf.reduce_sum(self.policy * tf.one_hot(action, NUM_ACTIONS), 1)  # (B,)
         ratio = pi / (oldpi + 1e-8)  # pnew / pold
         clip_param = tf.get_variable(
@@ -177,7 +160,8 @@ class Model(ModelDesc):
         surr1 = ratio * atarg  # surrogate from conservative policy iteration
         surr2 = tf.clip_by_value(ratio, 1.0 - clip_param, 1.0 + clip_param) * atarg
         """PPO's pessimistic surrogate (L^CLIP)"""
-        pol_surr = - tf.reduce_sum(tf.minimum(surr1, surr2))
+        # @lezhang.thu
+        pol_surr = tf.reduce_sum(tf.minimum(surr1, surr2))
 
         vfloss1 = tf.square(self.value - ret)
         vpredclipped = vpred_old + \
@@ -197,19 +181,28 @@ class Model(ModelDesc):
 
         # @lezhang.thu
         with tf.variable_scope('average'), \
-                collection.freeze_collection([tf.GraphKeys.TRAINABLE_VARIABLES]):
-            logits_avg = self._get_NN_prediction(state)
+             collection.freeze_collection([tf.GraphKeys.TRAINABLE_VARIABLES]):
+            policy_avg = tf.nn.softmax(self._get_NN_prediction(state), name='policy_avg')
 
-        klavgnew = self.kl(logits_avg, logits)
-        k = tf.gradients(klavgnew, self.policy)
-        
+        """(B, policy_avg's prob. vector / self.policy's prob. vector"""
+        grad_klavgnew = -  policy_avg / (self.policy + 1e-8)
+        """(B, the length of self.policy)"""
+        grad_pol_surr = tf.gradients(pol_surr, self.policy)
+        constraint = tf.reduce_sum(grad_klavgnew * grad_pol_surr,
+                                   axis=1, keep_dims=True) - TRUST_REGION_DELTA
+        modify = tf.maximum(
+            0.0,
+            constraint / tf.reduce_sum(tf.square(grad_klavgnew),
+                                       axis=1, keep_dims=True)) * grad_klavgnew
+        z_star = grad_pol_surr - modify
+        z_star = tf.stop_gradient(z_star)
+        policy_loss = - tf.reduce_sum(z_star * self.policy, name='policy_loss')
 
-
-        self.cost = tf.add_n([pol_surr, xentropy_loss * entropy_beta, vf_loss])
+        self.cost = tf.add_n([policy_loss, xentropy_loss * entropy_beta, vf_loss])
         self.cost = tf.truediv(self.cost,
                                tf.cast(tf.shape(weight)[0], tf.float32),
                                name='cost')
-        summary.add_moving_summary(pol_surr, xentropy_loss,
+        summary.add_moving_summary(policy_loss, xentropy_loss,
                                    vf_loss, pred_reward, advantage,
                                    self.cost)
 
@@ -221,7 +214,6 @@ class Model(ModelDesc):
                      SummaryGradient()]
         opt = optimizer.apply_grad_processors(opt, gradprocs)
         return opt
-
 
     @staticmethod
     def update_avg_param():
@@ -238,7 +230,6 @@ class Model(ModelDesc):
         return tf.group(*ops, name='update_avg_network')
 
 
-
 class MySimulatorWorker(SimulatorProcess):
     def __init__(self, idx, pipe_c2s, pipe_s2c, joint_info, dirname):
         super(MySimulatorWorker, self).__init__(idx, pipe_c2s, pipe_s2c)
@@ -252,7 +243,7 @@ class MySimulatorWorker(SimulatorProcess):
 
         if os.path.isfile(self.file_path):
             self._read_joint()
-        # self._init_window()
+            # self._init_window()
 
     def _init_window(self):
         self.w = {
