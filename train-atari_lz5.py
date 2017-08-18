@@ -185,7 +185,7 @@ class Model(ModelDesc):
             policy_avg = tf.nn.softmax(self._get_NN_prediction(state), name='policy_avg')
 
         """(B, policy_avg's prob. vector / self.policy's prob. vector"""
-        grad_klavgnew = -  policy_avg / (self.policy + 1e-8)
+        grad_klavgnew = - policy_avg / (self.policy + 1e-8)
         """(B, the length of self.policy)"""
         grad_pol_surr = tf.gradients(pol_surr, self.policy)
         constraint = tf.reduce_sum(grad_klavgnew * grad_pol_surr,
