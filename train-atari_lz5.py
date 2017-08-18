@@ -184,7 +184,7 @@ class Model(ModelDesc):
              collection.freeze_collection([tf.GraphKeys.TRAINABLE_VARIABLES]):
             policy_avg = tf.nn.softmax(self._get_NN_prediction(state), name='policy_avg')
 
-        """(B, policy_avg's prob. vector / self.policy's prob. vector"""
+        """(B, policy_avg's prob. vector / self.policy's prob. vector)"""
         grad_klavgnew = - policy_avg / (self.policy + 1e-8)
         """(B, the length of self.policy)"""
         grad_pol_surr = tf.gradients(pol_surr, self.policy)
