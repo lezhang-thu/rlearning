@@ -524,7 +524,7 @@ def get_shared_mem(num_proc):
 
 
 def get_config():
-    dirname = os.path.join('train_log', 'train-lezhang-4-{}'.format(ENV_NAME))
+    dirname = os.path.join('train_log', 'train-lezhang-5-{}'.format(ENV_NAME))
     logger.set_logger_dir(dirname)
     M = Model()
 
