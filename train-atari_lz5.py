@@ -74,7 +74,7 @@ DECAY_FACTOR = 0.99
 CLIP_PARAM = 0.1
 
 AVG_UPDATE_ALPHA = 0.99
-TRUST_REGION_DELTA = 1
+TRUST_REGION_DELTA = 1.0
 
 
 def get_player(viz=False, train=False, dumpdir=None, require_gym=False):
