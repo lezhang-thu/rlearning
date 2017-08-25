@@ -136,8 +136,8 @@ if __name__ == '__main__':
 
         def _on_episode_over(self, client):
             # print("Over: ", client.memory)
-            client.memory = []
-            client.state = 0
+            # client.memory = []
+            # client.state = 0
 
 
     name = 'ipc://whatever'
