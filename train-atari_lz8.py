@@ -56,10 +56,10 @@ IMAGE_SHAPE3 = IMAGE_SIZE + (CHANNEL,)
 
 STEPS_PER_EPOCH = 6000
 EVAL_EPISODE = 5
-BATCH_SIZE = 32 
-PREDICT_BATCH_SIZE = 8  # batch for efficient forward
+BATCH_SIZE = 64 
+PREDICT_BATCH_SIZE = 4  # batch for efficient forward
 """expreplay longer w.r.t. time, hence less agents"""
-SIMULATOR_PROC = 16
+SIMULATOR_PROC = 8
 
 PREDICTOR_THREAD_PER_GPU = 3
 PREDICTOR_THREAD = None
@@ -73,7 +73,7 @@ FILENAME = 'psc_data.pkl'
 SYNC_STEPS = 1e5
 
 CLIP_PARAM = 0.2
-MEMORY_SIZE = 1e5
+MEMORY_SIZE = 2e4
 UPDATE_FREQ = BATCH_SIZE
 
 
