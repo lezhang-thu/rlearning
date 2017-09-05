@@ -414,7 +414,9 @@ class MySimulatorMaster(SimulatorMaster, Callback, DataFlow):
     def _on_episode_over(self, ident):
         # @lezhang.thu
         client = self.clients[ident]
+        client.memory.reverse()
         t_list = []
+        
         """vpred_tp1 is \hat{v}(S_t+1, w)"""
         vpred_tp1 = 0.0
         gaelam = 0.0
@@ -426,13 +428,13 @@ class MySimulatorMaster(SimulatorMaster, Callback, DataFlow):
             t_list.append(
                 [k.state, k.reward_acc, k.action, k.prob, k.value, gaelam, gaelam + k.value])
             vpred_tp1 = k.value
-        """t_list[k][4] is gaelam, i.e. adv"""
-        atarg = [t_list[k][4] for k in range(len(t_list))]
+        """t_list[k][5] is gaelam, i.e. adv"""
+        atarg = [t_list[k][5] for k in range(len(t_list))]
         atarg = np.asarray(atarg)
         """standardized advantage function estimate"""
         atarg = (atarg - atarg.mean()) / atarg.std()
         for k in range(len(t_list)):
-            t_list[k][4] = atarg[k]
+            t_list[k][5] = atarg[k]
 
         for e in t_list:
             self.expreplay.add(e)
