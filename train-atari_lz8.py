@@ -74,7 +74,7 @@ SYNC_STEPS = 1e5
 
 CLIP_PARAM = 0.2
 MEMORY_SIZE = 1e5
-UPDATE_FREQ = 4
+UPDATE_FREQ = BATCH_SIZE
 
 
 def get_player(viz=False, train=False, dumpdir=None, require_gym=False):
