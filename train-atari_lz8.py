@@ -482,7 +482,7 @@ def get_shared_mem(num_proc):
         'lock': Lock(),
         # initially zeroed
         'updated': RawArray(ctypes.c_int, num_proc),
-        'sync_steps': SYNC_STEPS}
+        'sync_steps': int(SYNC_STEPS)}
 
 
 def get_config():
