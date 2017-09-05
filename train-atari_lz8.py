@@ -72,7 +72,7 @@ PSC_IMAGE_SIZE = (42, 42)
 FILENAME = 'psc_data.pkl'
 SYNC_STEPS = 1e5
 
-CLIP_PARAM = 0.2
+CLIP_PARAM = 0.1
 MEMORY_SIZE = 2e4
 UPDATE_FREQ = BATCH_SIZE
 
@@ -157,7 +157,7 @@ class Model(ModelDesc):
     def _build_graph(self, inputs):
         state, reward_acc, action, oldpi, vpred_old, atarg, ret = inputs
 
-        logits, self.value = self._get_NN_prediction(state, reward_acc)
+        logits, self.value = self.get_NN_prediction(state, reward_acc)
         self.value = tf.squeeze(self.value, [1], name='pred_value')  # (B,)
         self.policy = tf.nn.softmax(logits, name='policy')
         is_training = get_current_tower_context().is_training
