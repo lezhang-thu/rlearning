@@ -51,7 +51,7 @@ LAM = 0.95
 CHANNEL = FRAME_HISTORY
 IMAGE_SHAPE3 = IMAGE_SIZE + (CHANNEL,)
 
-LOCAL_TIME_MAX = 5
+LOCAL_TIME_MAX = 1
 STEPS_PER_EPOCH = 6000
 EVAL_EPISODE = 5
 BATCH_SIZE = 128
@@ -66,6 +66,7 @@ NETWORK_ARCH = None  # network architecture
 PSC_COLOR_MAX = 256
 PSC_IMAGE_SIZE = (84, 84)
 FILENAME = 'psc_data.pkl'
+SYNC_STEPS = 1e5
 
 CLIP_PARAM = 0.1
 
@@ -119,7 +120,7 @@ class Model(ModelDesc):
 
     def _get_NN_prediction(self, image, reward_acc):
         image = tf.cast(image, tf.float32) / 255.0
-        reward_acc = tf.cast(reward_acc, tf.float32)
+        # reward_acc = tf.cast(reward_acc, tf.float32)
         with argscope(Conv2D, nl=tf.nn.relu):
             if NETWORK_ARCH == 'tensorpack':
                 l = Conv2D('conv0', image, out_channel=32, kernel_shape=5)
@@ -135,11 +136,11 @@ class Model(ModelDesc):
                 l = Conv2D('conv2', l, out_channel=64, kernel_shape=3, stride=1)
         l = FullyConnected('fc0', l, 512, nl=tf.identity)
 
-        reward_acc = FullyConnected('fc0-r', reward_acc, out_dim=128, nl=tf.nn.relu)
-        reward_acc = FullyConnected('fc1-r', reward_acc, out_dim=128, nl=tf.nn.relu)
-        reward_acc = FullyConnected('fc2-r', reward_acc, out_dim=128, nl=tf.identity)
+        # reward_acc = FullyConnected('fc0-r', reward_acc, out_dim=128, nl=tf.nn.relu)
+        # reward_acc = FullyConnected('fc1-r', reward_acc, out_dim=128, nl=tf.nn.relu)
+        # reward_acc = FullyConnected('fc2-r', reward_acc, out_dim=128, nl=tf.identity)
 
-        l = tf.concat([l, reward_acc], axis=1)
+        # l = tf.concat([l, reward_acc], axis=1)
         l = PReLU('prelu', l)
 
         logits = FullyConnected('fc-pi', l, out_dim=NUM_ACTIONS, nl=tf.identity)  # unnormalized policy
@@ -403,13 +404,13 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             client.prev_episode.append(
                 [k.state, k.reward_acc, k.action, k.prob, k.value, gaelam, gaelam + k.value])
             vpred_tp1 = k.value
-        """client.prev_episode[k][4] is gaelam, i.e. adv"""
-        atarg = [client.prev_episode[k][4] for k in range(len(client.prev_episode))]
+        """client.prev_episode[k][5] is gaelam, i.e. adv"""
+        atarg = [client.prev_episode[k][5] for k in range(len(client.prev_episode))]
         atarg = np.asarray(atarg)
         """standardized advantage function estimate"""
         atarg = (atarg - atarg.mean()) / atarg.std()
         for k in range(len(client.prev_episode)):
-            client.prev_episode[k][4] = atarg[k]
+            client.prev_episode[k][5] = atarg[k]
         client.memory.clear()  # remember!
 
     def _on_datapoint(self, ident, policy):
@@ -436,8 +437,9 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             self.avg_old = self.avg_new
 
     def _trigger_epoch(self):
-        self.trainer.monitors.put_scalar('avg_new', self.avg_new)
-        self.trainer.monitors.put_scalar('avg_old', self.avg_old)
+        # self.trainer.monitors.put_scalar('avg_new', self.avg_new)
+        # self.trainer.monitors.put_scalar('avg_old', self.avg_old)
+        pass
 
     def run(self):
         try:
@@ -457,7 +459,9 @@ class MySimulatorMaster(SimulatorMaster, Callback):
 
                 if len(client.memory) > 0:  # only policy is 'old'
                     # R_t in (S_{t-1}, A_{t-1}, R_t, \hat{v}(S_{t-1}, w)
-                    client.memory[-1].reward = reward + pseudo_reward
+                    # client.memory[-1].reward = reward + pseudo_reward
+                    # @lezhang.thu, handcrafted, pseudo_reward or not
+                    client.memory[-1].reward = reward
                 if is_over:
                     self._on_episode_over(ident, policy)
                     client.reward_acc = 0
@@ -480,7 +484,7 @@ def get_shared_mem(num_proc):
         'lock': Lock(),
         # initially zeroed
         'updated': RawArray(ctypes.c_int, num_proc),
-        'sync_steps': sync_steps}
+        'sync_steps': int(SYNC_STEPS)}
 
 
 def get_config():
@@ -522,6 +526,9 @@ def get_config():
             ScheduledHyperParamSetter('clip_param', [(0, CLIP_PARAM), (1000, 0.0)], interp='linear'),
             master,
             StartProcOrThread(master),
+            PeriodicTrigger(Evaluator(
+                EVAL_EPISODE, ['state'], ['policy_old'], get_player),
+                every_k_epochs=1),
         ],
         session_creator=sesscreate.NewSessionCreator(
             config=get_default_sess_config(0.5)),
@@ -558,12 +565,12 @@ if __name__ == '__main__':
 
     if args.task != 'train':
         assert args.load is not None
-        '''
+        
         cfg = PredictConfig(
             model=Model(),
             session_init=get_model_loader(args.load),
             input_names=['state'],
-            output_names=['policy'])
+            output_names=['policy_old'])
         if args.task == 'play':
             play_model(cfg, get_player(viz=0.01))
         elif args.task == 'eval':
@@ -573,7 +580,6 @@ if __name__ == '__main__':
                 get_player(train=False, dumpdir=args.output),
                 OfflinePredictor(cfg), args.episode)
             # gym.upload(output, api_key='xxx')
-        '''
     else:
         nr_gpu = get_nr_gpu()
         if nr_gpu > 0:
