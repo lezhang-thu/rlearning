@@ -34,7 +34,8 @@ ranking_loss = 'svm'
 
 graph_evaluate = tf.Graph()
 with graph_evaluate.as_default():
-    #Only useful when loading Python 2 generated pickled files in Python 3, which includes npy/npz files containing object arrays.
+    #Only useful when loading Python 2 generated pickled files in Python 3, which 
+    #includes npy/npz files containing object arrays.
     #Values other than ‘latin1’, ‘ASCII’, and ‘bytes’ are not allowed, as they can corrupt numerical data.
     #https://stackoverflow.com/a/47814305
     net_data = np.load('alexnet.npy', encoding='bytes').item()
