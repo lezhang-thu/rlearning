@@ -17,12 +17,15 @@ import networksl as nw_evaluate
 import math
 import collections
 
+import glob
+import re
+import os
+
 num_actions = 14
 virtual_loss = 3
-c_puct = 5
+c_puct = 1
 num_virtual_threads = 4
 num_simulations = 5
-#num_virtual_threads=1
 global_dtype = tf.float32
 
 #although in r0.12, the checkpoint is stored in multiple files, you can restore it by
@@ -34,8 +37,7 @@ ranking_loss = 'svm'
 
 graph_evaluate = tf.Graph()
 with graph_evaluate.as_default():
-    #Only useful when loading Python 2 generated pickled files in Python 3, which 
-    #includes npy/npz files containing object arrays.
+    #Only useful when loading Python 2 generated pickled files in Python 3, which includes npy/npz files containing object arrays.
     #Values other than ‘latin1’, ‘ASCII’, and ‘bytes’ are not allowed, as they can corrupt numerical data.
     #https://stackoverflow.com/a/47814305
     net_data = np.load('alexnet.npy', encoding='bytes').item()
@@ -175,7 +177,7 @@ class MCTS:
                 }
             )[0]
         #debug
-        print('self.baseline {}'.format(self.baseline))
+        print('baseline {}'.format(self.baseline))
         self.sess = {'policy': sess_policy, 'evaluate': sess_evaluate}
 
     def _get_evaluation(self, crop_img):
@@ -272,7 +274,7 @@ class MCTS:
             np.copy(leaf.state['terminal'])
         )
         #debug
-        action_sample_ls = []
+        #        action_sample_ls = []
         while not terminal[0]:
             #sample an action
             action_prob, hidden_state, cell_state = self._get_action_prob(
@@ -282,7 +284,7 @@ class MCTS:
             action_sample = np.random.choice(
                 num_actions, 1, p=np.reshape(action_prob, (-1))
             )
-            action_sample_ls.append(action_sample[0])
+            #            action_sample_ls.append(action_sample[0])
             ratio, terminal = command2action(action_sample, ratio, terminal)
             #debug
             #            print('ratio {}'.format(ratio))
@@ -372,6 +374,9 @@ class MCTS:
             if max_child is None or max_child.parent_info['statistics'][
                 'Nsa'
             ] < c.parent_info['statistics']['Nsa']:
+                #             if max_child is None or max_child.parent_info['statistics'][
+                #                 'Qsa'
+                #             ] < c.parent_info['statistics']['Qsa']:
                 max_child = c
                 action = i
         self.root = max_child
@@ -413,15 +418,132 @@ def auto_cropping(original_image):
 #     action_ls.append(mcts_tree.act_one_step())
     return action_ls, mcts_tree.get_crop_box()
 
+
+def auto_crop_a2rl(origin_image):
+
+    batch_size = len(origin_image)
+
+    terminals = np.zeros(batch_size)
+    ratios = np.repeat([[0, 0, 20, 20]], batch_size, axis=0)
+    img = crop_input(origin_image, generate_bbox(origin_image, ratios))
+
+    with sess_policy.as_default():
+        global_feature = sess_policy.run(
+            global_feature_placeholder,
+            feed_dict={
+                image_placeholder_policy: img
+            }
+        )
+
+    #print('global_feature {}'.format(global_feature))
+    h_np = np.zeros([batch_size, 1024])
+    c_np = np.zeros([batch_size, 1024])
+    #debug
+    action_ls = []
+    while True:
+        with sess_policy.as_default():
+            action_np, h_np, c_np = sess_policy.run(
+                (action, h, c),
+                feed_dict={
+                    image_placeholder_policy: img,
+                    global_feature_placeholder: global_feature,
+                    h_placeholder: h_np,
+                    c_placeholder: c_np
+                }
+            )
+        #updated by lezhang.thu
+
+
+#        print('prob {}'.format(np.reshape(action_np, (-1))))
+#action_np = np.argmax(action_np, axis=1)
+        action_np = np.random.choice(
+            num_actions, 1, p=np.reshape(action_np, (-1))
+        )
+        #action_np = np.reshape(action_np, (-1))
+        #        print('action_np {}'.format(action_np))
+        action_ls.append(action_np[0])
+
+        ratios, terminals = command2action(action_np, ratios, terminals)
+        bbox = generate_bbox(origin_image, ratios)
+        if np.sum(terminals) == batch_size:
+            #            print('action_ls {}'.format(action_ls))
+            return action_ls, bbox
+
+        img = crop_input(origin_image, bbox)
+
+num_samples = 50
+
+
+def auto_crop_a2rl_wrapper(original_image):
+    origin_image = np.expand_dims(original_image, axis=0)
+    best_score, best_box, best_action = None, None, None
+    for _ in range(num_samples):
+        action_ls, box = auto_crop_a2rl(origin_image)
+        crop_image = crop_input(origin_image, box)
+        with sess_evaluate.as_default():
+            score = sess_evaluate.run(
+                score_func, feed_dict={
+                    image_placeholder_evaluate: crop_img
+                }
+            )[0]
+        if best_score is None or best_score < score:
+            best_score = score
+            best_box = box
+            best_action = action_ls
+    return best_action, best_box[0]
+
+
 if __name__ == '__main__':
     #parser = argparse.ArgumentParser(description='Auto Image Cropping')
     #parser.add_argument('--image_path', required=True, help='Path for the image to be cropped')
     #parser.add_argument('--save_path', required=True, help='Path for saving cropped image')
 
     #args = parser.parse_args()
-    image_path = join('RL_test_images', '639741.jpg')
-    save_path = join('RL_test_images', '639741_cropped.jpg')
-    im = io.imread(image_path).astype(np.float32) / 255
-    action_ls, (xmin, ymin, xmax, ymax) = auto_cropping(im - 0.5)
-    print('action list {}\n'.format(action_ls))
-    io.imsave(save_path, im[ymin:ymax, xmin:xmax])
+    #     image_path = join('RL_test_images', '639741.jpg')
+    #     save_path = join('RL_test_images', '639741_cropped.jpg')
+    #     im = io.imread(image_path).astype(np.float32) / 255
+    #     action_ls, (xmin, ymin, xmax, ymax) = auto_cropping(im - 0.5)
+    #     print('action list {}\n'.format(action_ls))
+    #     io.imsave(save_path, im[ymin:ymax, xmin:xmax])
+    parser = argparse.ArgumentParser(description='Auto Image Cropping')
+    parser.add_argument(
+        '--image_folder',
+        required=True,
+        help='File folder for the images to be cropped'
+    )
+    args = parser.parse_args()
+    filepath = args.image_folder
+
+    for image_path in glob.glob(join(filepath, '*')):
+        name, suffix = os.path.splitext(os.path.basename(image_path))
+        save_path_1 = join(filepath, name + '_1' + suffix)
+        save_path_2 = join(filepath, name + '_2' + suffix)
+        im = io.imread(image_path).astype(np.float32) / 255
+
+        action_ls, box = auto_cropping(im - 0.5)
+        xmin, ymin, xmax, ymax = box
+        crop_img = crop_input([im - 0.5], [box])
+        with sess_evaluate.as_default():
+            score = sess_evaluate.run(
+                score_func, feed_dict={
+                    image_placeholder_evaluate: crop_img
+                }
+            )[0]
+        print('for image {}, score_1 is {}'.format(name + suffix, score))
+        print('action list {}'.format(action_ls))
+        io.imsave(save_path_1, im[ymin:ymax, xmin:xmax])
+
+        action_ls, box = auto_crop_a2rl_wrapper(im - 0.5)
+        xmin, ymin, xmax, ymax = box
+        crop_img = crop_input([im - 0.5], [box])
+        with sess_evaluate.as_default():
+            score = sess_evaluate.run(
+                score_func, feed_dict={
+                    image_placeholder_evaluate: crop_img
+                }
+            )[0]
+
+        print('for image {}, score_2 is {}'.format(name + suffix, score))
+        print('action list {}'.format(action_ls))
+        io.imsave(save_path_2, im[ymin:ymax, xmin:xmax])
+        print('\n')
