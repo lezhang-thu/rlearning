@@ -9,46 +9,46 @@ def command2action(command_ids, ratios, terminals):
         if terminals[i] == 1:
             continue
         if command_ids[i] == 0:
-            ratios[i, 0] += 1
-            ratios[i, 1] += 1
-            ratios[i, 2] -= 1
-            ratios[i, 3] -= 1
+            ratios[i][0] += 1
+            ratios[i][1] += 1
+            ratios[i][2] -= 1
+            ratios[i][3] -= 1
         elif command_ids[i] == 1:
-            ratios[i, 2] -= 1
-            ratios[i, 3] -= 1
+            ratios[i][2] -= 1
+            ratios[i][3] -= 1
         elif command_ids[i] == 2:
-            ratios[i, 0] += 1
-            ratios[i, 3] -= 1
+            ratios[i][0] += 1
+            ratios[i][3] -= 1
         elif command_ids[i] == 3:
-            ratios[i, 1] += 1
-            ratios[i, 2] -= 1
+            ratios[i][1] += 1
+            ratios[i][2] -= 1
         elif command_ids[i] == 4:
-            ratios[i, 0] += 1
-            ratios[i, 1] += 1
+            ratios[i][0] += 1
+            ratios[i][1] += 1
         elif command_ids[i] == 5:
-            ratios[i, 0] += 1
-            ratios[i, 2] += 1
+            ratios[i][0] += 1
+            ratios[i][2] += 1
         elif command_ids[i] == 6:
-            ratios[i, 0] -= 1
-            ratios[i, 2] -= 1
+            ratios[i][0] -= 1
+            ratios[i][2] -= 1
         elif command_ids[i] == 7:
-            ratios[i, 1] -= 1
-            ratios[i, 3] -= 1
+            ratios[i][1] -= 1
+            ratios[i][3] -= 1
         elif command_ids[i] == 8:
-            ratios[i, 1] += 1
-            ratios[i, 3] += 1
+            ratios[i][1] += 1
+            ratios[i][3] += 1
         elif command_ids[i] == 9:
-            ratios[i, 1] += 1
-            ratios[i, 3] -= 1
+            ratios[i][1] += 1
+            ratios[i][3] -= 1
         elif command_ids[i] == 10:
-            ratios[i, 0] += 1
-            ratios[i, 2] -= 1
+            ratios[i][0] += 1
+            ratios[i][2] -= 1
         elif command_ids[i] == 11:
-            ratios[i, 1] -= 1
-            ratios[i, 3] += 1
+            ratios[i][1] -= 1
+            ratios[i][3] += 1
         elif command_ids[i] == 12:
-            ratios[i, 0] -= 1
-            ratios[i, 2] += 1
+            ratios[i][0] -= 1
+            ratios[i][2] += 1
         elif command_ids[i] == 13:
             terminals[i] = 1
         else:
@@ -56,7 +56,7 @@ def command2action(command_ids, ratios, terminals):
 
         ratios = np.maximum(ratios, 0)
         ratios = np.minimum(ratios, 20)
-        if ratios[i, 2] - ratios[i, 0] <= 4 or ratios[i, 3] - ratios[i, 1] <= 4:
+        if ratios[i][2] - ratios[i][0] <= 4 or ratios[i][3] - ratios[i][1] <= 4:
             terminals[i] = 1
 
     return ratios, terminals
