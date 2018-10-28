@@ -263,7 +263,7 @@ class MCTS:
                         Psa=action_prob_ls[i][k]
                     )
                 )
-            dummy_terminal_ls[-1] = True
+            dummy_terminal_ls[-1] = False
 
     def _backup(self, leaf, value):
         s = leaf
