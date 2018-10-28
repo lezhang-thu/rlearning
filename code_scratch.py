@@ -12,7 +12,9 @@ class MCTS:
         self.original_image = np.expand_dims(
             original_image, axis=0
         )  #no resize!!!
-        self.dummy_original_image_ls = [original_image] * num_virtual_threads
+        self.dummy_original_image_ls = [original_image] * max(
+            num_actions, num_virtual_threads
+        )
 
         #the neural networks require the resized image!!!
         original_image = transform.resize(
@@ -26,7 +28,7 @@ class MCTS:
                 feed_dict={
                     image_placeholder_policy: original_image
                 }
-            )
+            )[0]
         self.dummy_global_feature_ls = [
             self.global_feature
         ] * num_virtual_threads
@@ -182,10 +184,10 @@ class MCTS:
                     min((i + 1) * BATCH_SIZE, len(purge_img_ls))
                 )
 
-                import sys
-                inp = input('continue? (y/n)')
-                if inp == 'n':
-                    raise KeyboardInterrupt
+                #                 import sys
+                #                 inp = input('continue? (y/n)')
+                #                 if inp == 'n':
+                #                     raise KeyboardInterrupt
                 action_prob_ls, purge_hidden_ls[start:end], purge_cell_ls[
                     start:end
                 ] = self._get_action_prob(
@@ -217,7 +219,7 @@ class MCTS:
             start, end = (
                 i * BATCH_SIZE, min((i + 1) * BATCH_SIZE, len(leaf_ls))
             )
-            value_ls[start:end] = self._get_evaluations(final_img_ls[start:end])
+            value_ls[start:end] = self._get_evaluation(final_img_ls[start:end])
         return value_ls
 
     def _expand_ls(self, leaf_ls):
@@ -256,6 +258,7 @@ class MCTS:
             ratio_leaf, dummy_terminal_ls = command2action(
                 dummy_action_ls, ratio_leaf, dummy_terminal_ls
             )
+
             box_ls = generate_bbox(
                 self.dummy_original_image_ls[:num_actions], ratio_leaf
             )
@@ -267,11 +270,11 @@ class MCTS:
             for k in range(num_actions):
                 leaf.children.append(
                     Node(
-                        crop_img=list(crop_img_ls[k]),
-                        hidden_state=list(purge_hidden_ls[i]),
-                        cell_state=list(purge_cell_ls[i]),
-                        ratio=list(ratio_leaf[k]),
-                        terminal=list(dummy_terminal_ls[k]),
+                        crop_img=[crop_img_ls[k]],
+                        hidden_state=[purge_hidden_ls[i]],
+                        cell_state=[purge_cell_ls[i]],
+                        ratio=[ratio_leaf[k]],
+                        terminal=[dummy_terminal_ls[k]],
                         parent=leaf,
                         Nsa=0,
                         Wsa=0,
