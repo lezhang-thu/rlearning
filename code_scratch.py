@@ -27,6 +27,9 @@ class MCTS:
                     image_placeholder_policy: original_image
                 }
             )
+        self.dummy_global_feature_ls = [
+            self.global_feature
+        ] * num_virtual_threads
 
         self.root = Node(
             crop_img=original_image,
@@ -68,10 +71,14 @@ class MCTS:
             return self.sess['policy'].run(
                 (action, h, c),
                 feed_dict={
-                    image_placeholder_policy: crop_img,
-                    global_feature_placeholder: self.global_feature,
-                    h_placeholder: hidden_state,
-                    c_placeholder: cell_state
+                    image_placeholder_policy:
+                    crop_img,
+                    global_feature_placeholder:
+                    self.dummy_global_feature_ls[:len(crop_img)],
+                    h_placeholder:
+                    hidden_state,
+                    c_placeholder:
+                    cell_state
                 }
             )
 
@@ -128,18 +135,19 @@ class MCTS:
 
     def _rollout_ls(self, leaf_ls):
         #initialize
-        crop_img_ls, hidden_state_ls, cell_state_ls, ratio_ls, terminal_ls = [
-            [None] * len(leaf_ls)
-        ] * 5
+        init_slots = []
+        for _ in range(5):
+            init_slots.append([None] * len(leaf_ls))
+        crop_img_ls, hidden_state_ls, cell_state_ls, ratio_ls, terminal_ls = init_slots
 
         #notice the np.copy
         for i, leaf in enumerate(leaf_ls):
             crop_img_ls[i], hidden_state_ls[i], cell_state_ls[i], ratio_ls[
                 i
             ], terminal_ls[i] = (
-                leaf.state['crop_img'][0], leaf.state['hidden_state'][0],
-                leaf.state['cell_state'][0], np.copy(leaf.state['ratio'][0]),
-                leaf.state['terminal'][0]
+                leaf.state['crop_img'][0],
+                leaf.state['hidden_state'][0], leaf.state['cell_state'][0],
+                np.copy(leaf.state['ratio'][0]), leaf.state['terminal'][0]
             )
         index_ls = [_ for _ in range(len(leaf_ls))]
 
@@ -147,9 +155,10 @@ class MCTS:
 
         while len(crop_img_ls) > 0:
             #purge
-            purge_img_ls, purge_hidden_ls, purge_cell_ls, purge_ratio_ls, purge_terminal_ls, purge_index = [
-                list()
-            ] * 6
+            init_slots = []
+            for _ in range(6):
+                init_slots.append(list())
+            purge_img_ls, purge_hidden_ls, purge_cell_ls, purge_ratio_ls, purge_terminal_ls, purge_index = init_slots
 
             for i, terminal in enumerate(terminal_ls):
                 if not terminal:
@@ -162,9 +171,9 @@ class MCTS:
                     purge_index.append(index_ls[i])
                 else:
                     final_img_ls[index_ls[i]] = crop_img_ls[i]
-
             if len(purge_img_ls) == 0:
                 break
+
             #compute action distributions
             action_ls = [None] * len(purge_img_ls)
             for i in range(len(purge_img_ls) // BATCH_SIZE + 1):
@@ -172,6 +181,11 @@ class MCTS:
                     i * BATCH_SIZE,
                     min((i + 1) * BATCH_SIZE, len(purge_img_ls))
                 )
+
+                import sys
+                inp = input('continue? (y/n)')
+                if inp == 'n':
+                    raise KeyboardInterrupt
                 action_prob_ls, purge_hidden_ls[start:end], purge_cell_ls[
                     start:end
                 ] = self._get_action_prob(
@@ -207,8 +221,10 @@ class MCTS:
         return value_ls
 
     def _expand_ls(self, leaf_ls):
-        purge_img_ls, purge_hidden_ls, purge_cell_ls, purge_leaf_ls = [list()
-                                                                      ] * 4
+        init_slots = []
+        for _ in range(4):
+            init_slots.append(list())
+        purge_img_ls, purge_hidden_ls, purge_cell_ls, purge_leaf_ls = init_slots
 
         for leaf in leaf_ls:
             if not leaf.state['terminal'][0]:
