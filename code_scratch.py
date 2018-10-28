@@ -139,7 +139,7 @@ class MCTS:
             ], terminal_ls[i] = (
                 leaf.state['crop_img'][0], leaf.state['hidden_state'][0],
                 leaf.state['cell_state'][0], np.copy(leaf.state['ratio'][0]),
-                np.copy(leaf.state['terminal'][0])
+                leaf.state['terminal'][0]
             )
         index_ls = [_ for _ in range(len(leaf_ls))]
 
