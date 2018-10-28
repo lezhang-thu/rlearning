@@ -234,7 +234,6 @@ class MCTS:
 
         dummy_action_ls = [_ for _ in range(num_actions)]
         dummy_terminal_ls = [False] * num_actions
-        dummy_terminal_ls[-1] = True
 
         for i, leaf in enumerate(purge_leaf_ls):
             ratio_leaf = np.repeat(leaf.state['ratio'], num_actions, axis=0)
@@ -249,21 +248,22 @@ class MCTS:
             )
 
             leaf.children = list()
-            for j in range(num_actions):
+            for k in range(num_actions):
                 leaf.children.append(
                     Node(
-                        crop_img=list(crop_img_ls[j]),
+                        crop_img=list(crop_img_ls[k]),
                         hidden_state=list(purge_hidden_ls[i]),
                         cell_state=list(purge_cell_ls[i]),
-                        ratio=list(ratio_leaf[j]),
-                        terminal=list(dummy_terminal_ls[j]),
+                        ratio=list(ratio_leaf[k]),
+                        terminal=list(dummy_terminal_ls[k]),
                         parent=leaf,
                         Nsa=0,
                         Wsa=0,
                         Qsa=0,
-                        Psa=action_prob_ls[i][j]
+                        Psa=action_prob_ls[i][k]
                     )
                 )
+            dummy_terminal_ls[-1] = True
 
     def _backup(self, leaf, value):
         s = leaf
