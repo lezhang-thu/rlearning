@@ -217,6 +217,8 @@ class MCTS:
                 purge_img_ls.append(leaf.state['crop_img'][0])
                 purge_hidden_ls.append(leaf.state['hidden_state'][0])
                 purge_cell_ls.append(leaf.state['cell_state'][0])
+        if len(purge_leaf_ls) == 0:
+            return
 
         action_prob_ls = [None] * len(purge_leaf_ls)
         for i in range(len(purge_img_ls) // BATCH_SIZE + 1):
