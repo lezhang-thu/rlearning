@@ -219,7 +219,7 @@ class MCTS:
                 purge_cell_ls.append(leaf.state['cell_state'][0])
 
         action_prob_ls = [None] * len(purge_leaf_ls)
-        for i in range(len(purge_img_ls) // BATCH_SIZE):
+        for i in range(len(purge_img_ls) // BATCH_SIZE + 1):
             start, end = (
                 i * BATCH_SIZE, min((i + 1) * BATCH_SIZE, len(purge_img_ls))
             )
