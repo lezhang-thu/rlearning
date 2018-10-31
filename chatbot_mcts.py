@@ -4,17 +4,13 @@ import pickle
 import argparse
 import numpy as np
 
-from os.path import join
-
+import os
 import math
-import collections
 
-num_actions = 14
 virtual_loss = 3
 c_puct = 1
-num_virtual_threads = 4
+num_virtual_threads = 10
 num_simulations = 5
-global_dtype = tf.float32
 
 BATCH_SIZE = 128
 
@@ -52,13 +48,19 @@ class Node:
         self.children = None
 
 
+# with open('parrot.pkl', 'wb') as f:
+#     pickle.dump(mylist, f)
+
+pairs_file_pth = 'parrot.pkl'
+with open(pairs_file_pth, 'rb') as f:
+    pairs = pickle.load(f)
+
 # Trim voc and pairs
 # pairs = trimRareWords(voc, pairs, MIN_COUNT)
 from cider_scorer2 import CiderScorer2
 refs_ls = []
 for pair in pairs:
-    output_sentence = pair[1]
-    refs_ls.append([output_sentence])
+    refs_ls.append([pair[1]])
 
 cider_scorer2 = CiderScorer2(refs_ls, n=4, sigma=6.0)
 
@@ -81,14 +83,15 @@ class MCTS:
             'voc': voc
         }
 
-        # Set dropout layers to eval mode
-        encoder.eval()
-        decoder.eval()
         self.nw = {'encoder': encoder, 'decoder': decoder}
         encoder_outputs, encoder_hidden = self._init_state(
             source_line, voc, encoder
         )
-        self.info['encoder_outputs'] = encoder_outputs  #global
+
+        #shape of encoder_outputs (max_length, batch_size, hidden_size)
+        self.info['encoder_outputs'] = encoder_outputs.expand(
+            -1, max(voc.num_words, num_virtual_threads), -1
+        )  #global
 
         self.root = Node(
             action=SOS_token,
@@ -102,7 +105,7 @@ class MCTS:
             'virtual_loss': virtual_loss
         }
 
-    def _init_encoder_outputs(self, source_line, voc, encoder):
+    def _init_state(self, sentence, voc, encoder):
         indexes_batch = [indexesFromSentence(voc, sentence)]
         lengths = torch.tensor([len(indexes) for indexes in indexes_batch])
         input_batch = torch.LongTensor(indexes_batch).transpose(0, 1)
@@ -116,11 +119,13 @@ class MCTS:
 
     def _get_evaluation(self, test):
         #normalize before return
-        return cider_scorer2.compute_score(test, [self.target_line]) / 5.0 - 2.0
+        return cider_scorer2.compute_score(test, [self.info['target_line']]
+                                          ) / 5.0 - 1.0
 
-    def _get_action_prob(self, decoder_input, decoder_hidden):
+    def _get_action_prob(self, decoder_input, decoder_hidden, batch_size):
         decoder_output, decoder_hidden = self.nw['decoder'](
-            decoder_input, decoder_hidden, self.info['encoder_outputs']
+            decoder_input, decoder_hidden,
+            self.info['encoder_outputs'][:, :batch_size, :]
         )
         return decoder_output, decoder_hidden
 
@@ -137,13 +142,13 @@ class MCTS:
 
         value_ls = self._rollout_ls(leaf_ls)
 
-        for i, leaf in enumerate(leaf_ls):
-            self._backup(leaf, value_ls[i])
+        for i in range(len(leaf_ls)):
+            self._backup(leaf_ls[i]['leaf'], value_ls[i])
 
-        leaf_set = set(leaf_ls)
+        leaf_set = set([leaf['leaf'] for leaf in leaf_ls])
         self._expand_ls(leaf_set)
         for leaf in leaf_set:
-            if not leaf.state['terminal'][0]:
+            if not leaf.state['terminal']:
                 leaf.state = None
 
     def _select(self):
@@ -186,17 +191,18 @@ class MCTS:
         init_slots = []
         for _ in range(4):
             init_slots.append([None] * len(leaf_ls))
-        decoder_input_ls, decoder_hidden_ls, terminal_ls, action_seq_ls = init_slots
+        (
+        decoder_input_ls, decoder_hidden_ls, terminal_ls, action_seq_ls
+        ) = init_slots
 
-        #notice the np.copy
         for i, leaf in enumerate(leaf_ls):
             decoder_input_ls[i], decoder_hidden_ls[i], terminal_ls[
                 i
             ], action_seq_ls[i] = (
                 torch.ones(1, 1, device=device, dtype=torch.long
-                          ) * leaf_ls[i]['leaf'].state['action'],
-                leaf_ls[i]['leaf'].state['decoder_hidden'],
-                leaf_ls[i]['leaf'].state['terminal'], leaf_ls[i]['action_seq']
+                          ) * leaf['leaf'].state['action'],
+                leaf['leaf'].state['decoder_hidden'],
+                leaf['leaf'].state['terminal'], leaf['action_seq']
             )
         index_ls = [_ for _ in range(len(leaf_ls))]
 
@@ -207,7 +213,10 @@ class MCTS:
             init_slots = []
             for _ in range(5):
                 init_slots.append(list())
-            purge_input_ls, purge_hidden_ls, purge_terminal_ls, purge_action_ls, purge_index = init_slots
+            (
+                purge_input_ls, purge_hidden_ls, purge_terminal_ls,
+                purge_action_ls, purge_index
+            ) = init_slots
 
             for i, terminal in enumerate(terminal_ls):
                 if not terminal:
@@ -235,11 +244,13 @@ class MCTS:
                 #                 inp = input('continue? (y/n)')
                 #                 if inp == 'n':
                 #                     raise KeyboardInterrupt
+
+                #(max_length, batch_size) for input batch
                 action_prob_ls, purge_hidden_ls[
                     start:end
                 ] = self._get_action_prob(
-                    torch.cat(purge_input_ls[start:end]),
-                    torch.cat(purge_hidden_ls[start:end])
+                    torch.cat(purge_input_ls[start:end], dim=1),
+                    torch.cat(purge_hidden_ls[start:end]), end - start
                 )
                 purge_input_ls[start:end] = torch.multinomial(
                     action_prob_ls, num_samples=1
@@ -252,14 +263,18 @@ class MCTS:
             for i in range(action_ls):
                 if action_ls[i] == EOS_token:
                     purge_terminal_ls[i] = True
-                else:
-                    purge_action_ls.append(action_ls[i])
+                purge_action_ls[i].append(action_ls[i])
 
-            decoder_input_ls, decoder_hidden_ls, terminal_ls = (
-                purge_input_ls, purge_hidden_ls, purge_terminal_ls
+            (
+                decoder_input_ls, decoder_hidden_ls, terminal_ls, index_ls,
+                action_seq_ls
+            ) = (
+                purge_input_ls, purge_hidden_ls, purge_terminal_ls, purge_index,
+                purge_action_ls
             )
-            index_ls = purge_index
-            action_seq_ls = purge_action_ls
+        #remove EOS_token
+        for seq in final_action_ls:
+            seq.pop()
 
         value_ls = [None] * len(leaf_ls)
         for i in range(len(leaf_ls)):
@@ -269,13 +284,13 @@ class MCTS:
 
         return value_ls
 
-    def _expand_ls(self, leaf_ls):
+    def _expand_ls(self, leaf_set):
         init_slots = []
         for _ in range(3):
             init_slots.append(list())
-        purge_leaf_ls, purge_input_ls, purge_hidden_ls = init_slots
+        (purge_leaf_ls, purge_input_ls, purge_hidden_ls) = init_slots
 
-        for leaf in leaf_ls:
+        for leaf in leaf_set:
             if not leaf.state['terminal']:
                 purge_leaf_ls.append(leaf)
                 purge_input_ls.append(
@@ -288,23 +303,25 @@ class MCTS:
             return
 
         action_prob_ls = [None] * len(purge_leaf_ls)
-        for i in range(len(purge_img_ls) // BATCH_SIZE + 1):
+        for i in range(len(purge_leaf_ls) // BATCH_SIZE + 1):
             start, end = (
-                i * BATCH_SIZE, min((i + 1) * BATCH_SIZE, len(purge_img_ls))
+                i * BATCH_SIZE, min((i + 1) * BATCH_SIZE, len(purge_leaf_ls))
             )
             action_prob_ls[start:end
                           ], purge_hidden_ls[start:end] = self._get_action_prob(
-                              torch.cat(purge_input_ls[start:end]),
-                              torch.cat(purge_hidden_ls[start:end])
+                              torch.cat(purge_input_ls[start:end], dim=1),
+                              torch.cat(
+                                  purge_hidden_ls[start:end], start - end
+                              )
                           )
 
         for i, leaf in enumerate(purge_leaf_ls):
             leaf.children = list()
-            for k in range(num_actions):
+            for k in range(self.info['voc'].num_words):
                 leaf.children.append(
                     Node(
                         action=k,
-                        decoder_hidden=purge_hidden_ls[k],
+                        decoder_hidden=purge_hidden_ls[i],
                         terminal=False,
                         parent=leaf,
                         Nsa=0,
@@ -350,36 +367,27 @@ class MCTS:
         self.root.parent_info = None
         return action
 
-    def debug_print(self):
-        if self.root.state is not None:
-            print('reach a leaf')
-        else:
-            for i, c in enumerate(self.root.children):
-                print(
-                    'Nsa {}, Wsa {}, Qsa {}, Psa {}'.format(
-                        c.parent_info['statistics']['Nsa'],
-                        c.parent_info['statistics']['Wsa'],
-                        c.parent_info['statistics']['Qsa'],
-                        c.parent_info['statistics']['Psa']
-                    )
-                )
-                print('above info for child {}'.format(i))
-            print('end of the printing this time ...')
+
+#     def debug_print(self):
+#         if self.root.state is not None:
+#             print('reach a leaf')
+#         else:
+#             for i, c in enumerate(self.root.children):
+#                 print(
+#                     'Nsa {}, Wsa {}, Qsa {}, Psa {}'.format(
+#                         c.parent_info['statistics']['Nsa'],
+#                         c.parent_info['statistics']['Wsa'],
+#                         c.parent_info['statistics']['Qsa'],
+#                         c.parent_info['statistics']['Psa']
+#                     )
+#                 )
+#                 print('above info for child {}'.format(i))
+#             print('end of the printing this time ...')
 
 
 def train(
-    input_variable,
-    lengths,
-    target_variable,
-    mask,
-    max_target_len,
-    encoder,
-    decoder,
-    encoder_optimizer,
-    decoder_optimizer,
-    batch_size,
-    clip,
-    max_length=MAX_LENGTH
+    input_variable, lengths, target_variable, mask, max_target_len, encoder,
+    decoder, encoder_optimizer, decoder_optimizer, batch_size, clip
 ):
 
     # Zero gradients
@@ -399,6 +407,7 @@ def train(
     encoder_outputs, encoder_hidden = encoder(input_variable, lengths)
 
     # Create initial decoder input (start with SOS tokens for each sentence)
+    # shape is (1, batchS_size)!!!
     decoder_input = torch.LongTensor([[SOS_token for _ in range(batch_size)]])
     decoder_input = decoder_input.to(device)
 
@@ -411,7 +420,7 @@ def train(
             decoder_input, decoder_hidden, encoder_outputs
         )
         # Teacher forcing: next input is current target
-        decoder_input = target_variable[t].view(1, -1)
+        decoder_input = target_variable[t].view(1, -1)  #notice shape!!!
         # Calculate and accumulate loss
         mask_loss, _ = maskNLLLoss(decoder_output, target_variable[t], mask[t])
         loss += mask_loss
@@ -459,11 +468,10 @@ checkpoint = torch.load(loadFilename)
 # If loading a model trained on GPU to CPU
 #checkpoint = torch.load(loadFilename, map_location=torch.device('cpu'))
 
-encoder_sd = checkpoint['en']
-decoder_sd = checkpoint['de']
-encoder_optimizer_sd = checkpoint['en_opt']
-decoder_optimizer_sd = checkpoint['de_opt']
-embedding_sd = checkpoint['embedding']
+(
+    encoder_sd, decoder_sd, encoder_optimizer_sd, decoder_optimizer_sd,
+    embedding_sd
+) = (checkpoint[e] for e in ('en', 'de', 'en_opt', 'de_opt', 'embedding'))
 
 # Initialize word embeddings
 embedding = nn.Embedding(voc.num_words, hidden_size)
@@ -542,10 +550,11 @@ while True:
                 mcts_tree.simulate_many_times(num_simulations)
                 #        mcts_tree.debug_print()
                 action_seq.append(mcts_tree.act_one_step())
+            action_seq.pop()
             target = ' '.join(
                 self.info['voc'].index2word(k) for k in action_seq
             )
-            training_data.append(pair[0], target)
+            training_data.append([pair[0], target])
 
         #player_train is trained over training data ...
         trainIters(
